@@ -4,7 +4,7 @@ CONFIG = {
     "model": "efficientnet_b0",
     "image_size": 224,
     "batch_size": 32,
-    "epochs": 10,
+    "epochs": 10,  # Increased from 1
     "learning_rate": 0.0001,
     "weight_decay": 0.00001,
     "num_workers": 4,

@@ -5,7 +5,9 @@ import api from '../lib/api'
 interface User {
   id: string
   email: string
-  createdAt: string
+  name?: string
+  role?: string
+  createdAt?: string // Add this
 }
 
 interface AuthState {

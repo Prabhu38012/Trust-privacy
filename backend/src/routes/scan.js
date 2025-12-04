@@ -34,18 +34,20 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
     
     filePath = req.file.path;
     console.log('[Scan] File:', req.file.originalname);
+    console.log('[Scan] Heatmaps:', req.body.heatmaps || 'true');
     
     // Check ML service
     try {
       await axios.get(ML_URL + '/health', { timeout: 3000 });
     } catch (e) {
       if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
-      return res.status(503).json({ message: 'ML service not running. Start it with: python app.py' });
+      return res.status(503).json({ message: 'ML service not running' });
     }
     
-    // Send to ML
+    // Send to ML with heatmap flag
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath), req.file.originalname);
+    form.append('heatmaps', req.body.heatmaps || 'true');
     
     const response = await axios.post(ML_URL + '/detect', form, {
       headers: form.getHeaders(),
@@ -55,11 +57,10 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
     });
     
     console.log('[Scan] Result:', response.data?.result?.verdict);
+    console.log('[Scan] Heatmaps generated:', response.data?.result?.analysis_summary?.heatmaps_generated || 0);
     
-    // Cleanup
     if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
     
-    // Return result
     res.json(response.data);
     
   } catch (error) {

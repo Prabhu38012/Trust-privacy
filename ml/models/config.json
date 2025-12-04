@@ -1,0 +1,12 @@
+{
+  "model_type": "efficientnet_b0",
+  "detection_methods": [
+    "neural_network",
+    "compression_artifacts",
+    "color_consistency",
+    "frequency_analysis",
+    "face_manipulation_detection"
+  ],
+  "production_mode": true,
+  "version": "2.0.0"
+}

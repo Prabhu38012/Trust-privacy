@@ -119,7 +119,12 @@ export default function Dashboard() {
   )
 }
 
-function StatCard({ title, value, change, color }: { title: string; value: string; change: string; color: string }) {
+function StatCard({ title, value, change, color }: { 
+  readonly title: string
+  readonly value: string
+  readonly change: string
+  readonly color: string
+}) {
   const colors: Record<string, string> = {
     cyan: 'border-cyan-500/20',
     purple: 'border-purple-500/20',
@@ -137,12 +142,12 @@ function StatCard({ title, value, change, color }: { title: string; value: strin
 }
 
 function FeatureCard({ icon, title, description, buttonText, gradient, disabled = false }: {
-  icon: React.ReactNode
-  title: string
-  description: string
-  buttonText: string
-  gradient: string
-  disabled?: boolean
+  readonly icon: React.ReactNode
+  readonly title: string
+  readonly description: string
+  readonly buttonText: string
+  readonly gradient: string
+  readonly disabled?: boolean
 }) {
   return (
     <div className={`glass-card bg-gradient-to-br ${gradient} rounded-2xl p-6 hover:border-white/20 transition-all group ${disabled ? '' : 'cursor-pointer hover:-translate-y-1'}`}>
@@ -164,7 +169,12 @@ function FeatureCard({ icon, title, description, buttonText, gradient, disabled 
   )
 }
 
-function InfoRow({ label, value, mono = false, badge }: { label: string; value: string; mono?: boolean; badge?: string }) {
+function InfoRow({ label, value, mono = false, badge }: { 
+  readonly label: string
+  readonly value: string
+  readonly mono?: boolean
+  readonly badge?: string
+}) {
   return (
     <div className="flex justify-between items-center py-3 border-b border-white/5 last:border-0">
       <span className="text-gray-400">{label}</span>

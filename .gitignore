@@ -3,14 +3,16 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+.venv/
+venv/
 
 # Build
 dist/
 build/
+*.egg-info/
 
 # Logs
 *.log
-npm-debug.log*
 
 # OS
 .DS_Store
@@ -20,13 +22,13 @@ Thumbs.db
 .vscode/
 .idea/
 
-# ML Model files (too large for GitHub)
+# ML Model files (too large)
 *.pth
 *.pt
 *.h5
 *.pkl
 *.onnx
-ml/models/
+ml/models/*.pth
 ml/train/checkpoints/
 ml/train/data/
 ml/uploads/

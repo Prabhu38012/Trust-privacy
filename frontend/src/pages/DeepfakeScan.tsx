@@ -45,6 +45,7 @@ export default function DeepfakeScan() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [certificateData, setCertificateData] = useState<any>(null)
 
   const handleDrag = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation() }, [])
   const handleDragIn = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true) }, [])
@@ -124,6 +125,49 @@ export default function DeepfakeScan() {
   const formatVerdict = (verdict?: string) => {
     if (!verdict) return 'UNKNOWN'
     return verdict.replace(/_/g, ' ')
+  }
+
+  const generateCertificate = async () => {
+    if (!scanResult) return
+    try {
+      const response = await api.post('/certificate/generate', {
+        scanId: scanResult.jobId,
+        verdict: scanResult.result.verdict,
+        score: scanResult.result.deepfake_score,
+        filename: file?.name || 'unknown'
+      })
+      
+      const certData = response.data.certificate
+      
+      setCertificateData(certData)
+      alert('Certificate generated!')
+    } catch (error) {
+      console.error('Certificate generation failed:', error)
+      alert('Failed to generate certificate')
+    }
+  }
+
+  const downloadReport = async () => {
+    if (!scanResult || !certificateData) return
+    try {
+      const response = await api.post('/report/generate', {
+        scanResult,
+        certificate: certificateData
+      }, {
+        responseType: 'blob'
+      })
+      
+      const blob = new Blob([response.data], { type: 'application/pdf' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `trustlock-report-${certificateData.id}.pdf`
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (error) {
+      console.error('Report download failed:', error)
+      alert('Failed to download report')
+    }
   }
 
   return (
@@ -241,7 +285,14 @@ export default function DeepfakeScan() {
           {/* Actions */}
           <div className="flex gap-4">
             <button onClick={resetScan} className="flex-1 py-3 px-6 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white rounded-xl font-medium transition-all">Scan Another File</button>
-            <button className="py-3 px-6 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium transition-all border border-white/10">Generate Certificate</button>
+            <button onClick={generateCertificate} disabled={certificateData} className="py-3 px-6 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium transition-all border border-white/10 disabled:opacity-50">
+              {certificateData ? '✓ Generated' : 'Generate Certificate'}
+            </button>
+            {certificateData && (
+              <button onClick={downloadReport} className="py-3 px-6 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-xl font-medium transition-all border border-emerald-500/30">
+                Download PDF
+              </button>
+            )}
           </div>
         </div>
       )}

@@ -172,7 +172,7 @@ def train(args):
     print(f"\nStarting training for {CONFIG['epochs']} epochs...")
     print("-" * 60)
     
-    for epoch in range(CONFIG["hi"]):
+    for epoch in range(CONFIG["epochs"]):
         print(f"\nEpoch {epoch + 1}/{CONFIG['epochs']}")
         
         # Train

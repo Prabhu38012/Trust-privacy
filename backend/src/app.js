@@ -8,6 +8,8 @@ const mongoose = require('mongoose');
 const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/user');
 const scanRoutes = require('./routes/scan');
+const certificateRoutes = require('./routes/certificate');
+const reportRoutes = require('./routes/report');
 
 const app = express();
 
@@ -51,6 +53,8 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/api/auth', authRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/scan', scanRoutes);
+app.use('/api/certificate', certificateRoutes);
+app.use('/api/report', reportRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

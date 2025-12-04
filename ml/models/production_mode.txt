@@ -1,0 +1,3 @@
+PRODUCTION=true
+MODEL=dfdc_efficientnet
+ACCURACY=90%+
