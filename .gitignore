@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.env
+
+# Build
+dist/
+build/
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# ML Model files (too large for GitHub)
+*.pth
+*.pt
+*.h5
+*.pkl
+*.onnx
+ml/models/
+ml/train/checkpoints/
+ml/train/data/
+ml/uploads/
+ml/frames/
+
+# Uploads
+uploads/
+frames/
