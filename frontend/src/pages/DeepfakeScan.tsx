@@ -38,6 +38,22 @@ interface ScanResult {
   processingTime: number
 }
 
+interface BlockchainCertificate {
+  id: string
+  scanId: string
+  filename: string
+  fileHash: string
+  verdict: string
+  score: number
+  timestamp: string
+  blockchain: {
+    onChain: boolean
+    transactionHash?: string
+    explorerUrl?: string
+    network?: string
+  }
+}
+
 // Helper function for score color classes
 function getScoreColorClass(score: number): string {
   if (score < 0.3) return 'text-emerald-400'
@@ -58,7 +74,8 @@ export default function DeepfakeScan() {
   const [uploadProgress, setUploadProgress] = useState(0)
   const [scanResult, setScanResult] = useState<ScanResult | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [certificateData, setCertificateData] = useState<any>(null)
+  const [certificateData, setCertificateData] = useState<BlockchainCertificate | null>(null)
+  const [isGeneratingCert, setIsGeneratingCert] = useState(false)
 
   const handleDrag = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation() }, [])
   const handleDragIn = useCallback((e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true) }, [])
@@ -142,6 +159,8 @@ export default function DeepfakeScan() {
 
   const generateCertificate = async () => {
     if (!scanResult) return
+    setIsGeneratingCert(true)
+    
     try {
       const response = await api.post('/certificate/generate', {
         scanId: scanResult.jobId,
@@ -150,13 +169,18 @@ export default function DeepfakeScan() {
         filename: file?.name || 'unknown'
       })
       
-      const certData = response.data.certificate
+      setCertificateData(response.data.certificate)
       
-      setCertificateData(certData)
-      alert('Certificate generated!')
+      if (response.data.certificate.blockchain?.onChain) {
+        alert(`✅ Certificate issued on ${response.data.certificate.blockchain.network}!\n\nTransaction: ${response.data.certificate.blockchain.transactionHash}`)
+      } else {
+        alert('✅ Certificate generated (off-chain)')
+      }
     } catch (error) {
       console.error('Certificate generation failed:', error)
       alert('Failed to generate certificate')
+    } finally {
+      setIsGeneratingCert(false)
     }
   }
 
@@ -268,6 +292,65 @@ export default function DeepfakeScan() {
             </div>
           </div>
 
+          {/* Blockchain Certificate Section */}
+          {certificateData && (
+            <div className="glass-card rounded-2xl p-6 border border-emerald-500/30">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-emerald-500/20 flex items-center justify-center">
+                  <svg className="w-5 h-5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-lg font-semibold text-white">Blockchain Certificate</h3>
+                  <p className="text-sm text-gray-400">
+                    {certificateData.blockchain?.onChain 
+                      ? `Verified on ${certificateData.blockchain.network}` 
+                      : 'Off-chain certificate'}
+                  </p>
+                </div>
+                {certificateData.blockchain?.onChain && (
+                  <span className="ml-auto px-3 py-1 bg-emerald-500/20 text-emerald-400 rounded-full text-xs font-medium">
+                    ⛓️ On-Chain
+                  </span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-500">Certificate ID</p>
+                  <p className="text-white font-mono text-xs truncate">{certificateData.id}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">File Hash</p>
+                  <p className="text-white font-mono text-xs truncate">{certificateData.fileHash}</p>
+                </div>
+                {certificateData.blockchain?.transactionHash && (
+                  <>
+                    <div className="col-span-2">
+                      <p className="text-gray-500">Transaction Hash</p>
+                      <p className="text-white font-mono text-xs truncate">{certificateData.blockchain.transactionHash}</p>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {certificateData.blockchain?.explorerUrl && (
+                <a
+                  href={certificateData.blockchain.explorerUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-lg text-sm font-medium transition-all"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                  </svg>
+                  View on {certificateData.blockchain.network} Explorer
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Analysis Details */}
           {scanResult.result.analysis_summary && (
             <div className="glass-card rounded-2xl p-6">
@@ -320,9 +403,32 @@ export default function DeepfakeScan() {
 
           {/* Actions */}
           <div className="flex gap-4">
-            <button onClick={resetScan} className="flex-1 py-3 px-6 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white rounded-xl font-medium transition-all">Scan Another File</button>
-            <button onClick={generateCertificate} disabled={certificateData} className="py-3 px-6 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium transition-all border border-white/10 disabled:opacity-50">
-              {certificateData ? '✓ Generated' : 'Generate Certificate'}
+            <button onClick={resetScan} className="flex-1 py-3 px-6 bg-gradient-to-r from-primary-500 to-primary-600 hover:from-primary-600 hover:to-primary-700 text-white rounded-xl font-medium transition-all">
+              Scan Another File
+            </button>
+            <button 
+              onClick={generateCertificate} 
+              disabled={!!certificateData || isGeneratingCert} 
+              className="py-3 px-6 bg-white/5 hover:bg-white/10 text-white rounded-xl font-medium transition-all border border-white/10 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+            >
+              {isGeneratingCert ? (
+                <>
+                  <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Issuing...
+                </>
+              ) : certificateData ? (
+                '✓ Certificate Issued'
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                  </svg>
+                  Generate Certificate
+                </>
+              )}
             </button>
             {certificateData && (
               <button onClick={downloadReport} className="py-3 px-6 bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 rounded-xl font-medium transition-all border border-emerald-500/30">

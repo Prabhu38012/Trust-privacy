@@ -1,70 +1,62 @@
 const mongoose = require('mongoose');
-const crypto = require('crypto');
 
 const certificateSchema = new mongoose.Schema({
+  id: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  scanId: {
+    type: String,
+    required: true
+  },
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
     required: true
   },
-  mediaHash: {
-    type: String,
-    required: true,
-    unique: true
-  },
-  mediaType: {
-    type: String,
-    enum: ['image', 'video', 'audio', 'document'],
-    required: true
-  },
-  originalFilename: {
+  filename: {
     type: String,
     required: true
   },
-  certificateId: {
+  fileHash: {
     type: String,
-    unique: true,
-    default: () => `TL-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString('hex').toUpperCase()}`
+    required: true
   },
-  blockchainTxHash: {
+  verdict: {
     type: String,
-    default: null
+    enum: ['AUTHENTIC', 'LIKELY_AUTHENTIC', 'UNCERTAIN', 'SUSPICIOUS', 'LIKELY_DEEPFAKE'],
+    required: true
   },
-  verificationStatus: {
-    type: String,
-    enum: ['pending', 'verified', 'failed', 'revoked'],
-    default: 'pending'
-  },
-  deepfakeScore: {
+  score: {
     type: Number,
+    required: true,
     min: 0,
-    max: 100,
-    default: null
+    max: 100
   },
-  metadata: {
-    fileSize: Number,
-    dimensions: {
-      width: Number,
-      height: Number
-    },
-    duration: Number,
-    format: String
-  },
-  issuedAt: {
+  timestamp: {
     type: Date,
     default: Date.now
   },
-  expiresAt: {
-    type: Date,
-    default: () => new Date(Date.now() + 365 * 24 * 60 * 60 * 1000) // 1 year
+  blockchain: {
+    onChain: {
+      type: Boolean,
+      default: false
+    },
+    transactionHash: String,
+    blockNumber: Number,
+    network: String,
+    explorerUrl: String,
+    reason: String
   }
 }, {
   timestamps: true
 });
 
 // Indexes
-certificateSchema.index({ userId: 1, createdAt: -1 });
-certificateSchema.index({ certificateId: 1 });
-certificateSchema.index({ mediaHash: 1 });
+certificateSchema.index({ scanId: 1 });
+certificateSchema.index({ userId: 1, timestamp: -1 });
+certificateSchema.index({ fileHash: 1 });
 
 module.exports = mongoose.model('Certificate', certificateSchema);

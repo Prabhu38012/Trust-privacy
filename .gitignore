@@ -73,3 +73,14 @@ backend/logs/
 *.temp
 temp/
 tmp/
+
+# Blockchain
+blockchain/cache/
+blockchain/artifacts/
+blockchain/deployments/*.json
+blockchain/.env
+blockchain/node_modules/
+
+# Keep example files
+!blockchain/.env.example
+!backend/.env.example

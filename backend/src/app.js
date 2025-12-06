@@ -1,4 +1,5 @@
-require('dotenv').config();
+require('dotenv').config();  // This MUST be the first line
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -13,8 +14,16 @@ const reportRoutes = require('./routes/report');
 
 const app = express();
 
-// Security middleware
-app.use(helmet());
+// Security middleware - relaxed for development
+if (process.env.NODE_ENV === 'production') {
+  app.use(helmet());
+} else {
+  // Development - disable CSP to avoid eval issues
+  app.use(helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false
+  }));
+}
 
 // CORS - Allow all localhost origins in development
 app.use(cors({
@@ -78,7 +87,10 @@ app.use((err, req, res, next) => {
 // Database connection and server start
 const PORT = process.env.PORT || 3001;
 
-mongoose.connect(process.env.MONGO_URI)
+// Fix: Use MONGODB_URI (matching .env file)
+const MONGODB_URI = process.env.MONGODB_URI || process.env.MONGO_URI || 'mongodb://localhost:27017/trustlock';
+
+mongoose.connect(MONGODB_URI)
   .then(() => {
     console.log('✅ Connected to MongoDB');
     app.listen(PORT, () => {
