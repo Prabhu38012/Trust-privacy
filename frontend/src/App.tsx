@@ -9,6 +9,7 @@ import DeepfakeScan from './pages/DeepfakeScan'
 import Certificate from './pages/Certificate'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
+import Certificates from './pages/Certificates'
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated } = useAuthStore()
@@ -39,6 +40,8 @@ function App() {
         <Route path="certificate" element={<Certificate />} />
         <Route path="admin" element={<Admin />} />
         <Route path="settings" element={<Settings />} />
+        <Route path="certificates" element={<Certificates />} />
+        <Route path="/dashboard/certificates" element={<Certificates />} />
       </Route>
       <Route path="*" element={<Navigate to="/" />} />
     </Routes>

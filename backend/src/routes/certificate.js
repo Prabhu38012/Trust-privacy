@@ -1,29 +1,33 @@
 const express = require('express');
 const crypto = require('crypto');
+const multer = require('multer');
+const fs = require('fs');
+const path = require('path');
 const { auth } = require('../middleware/auth');
 const blockchainService = require('../services/blockchain');
 const Certificate = require('../models/Certificate');
 
 const router = express.Router();
 
+// Setup upload for verification
+const uploadDir = path.join(__dirname, '../../uploads/verify');
+if (!fs.existsSync(uploadDir)) {
+  fs.mkdirSync(uploadDir, { recursive: true });
+}
+const upload = multer({ dest: uploadDir, limits: { fileSize: 100 * 1024 * 1024 } });
+
 /**
  * POST /api/certificate/generate
- * Generate a blockchain certificate for a scan result
  */
 router.post('/generate', auth, async (req, res) => {
   try {
     const { scanId, verdict, score, filename, fileHash: providedHash } = req.body;
 
     if (!scanId || !verdict || score === undefined) {
-      return res.status(400).json({ 
-        message: 'Missing required fields: scanId, verdict, score' 
-      });
+      return res.status(400).json({ message: 'Missing required fields' });
     }
 
-    // Generate file hash if not provided
     const fileHash = providedHash || '0x' + crypto.randomBytes(32).toString('hex');
-
-    // Check if blockchain is available
     const blockchainAvailable = await blockchainService.initialize();
 
     let blockchainResult = null;
@@ -31,24 +35,15 @@ router.post('/generate', auth, async (req, res) => {
 
     if (blockchainAvailable) {
       try {
-        // Create a buffer from the hash for blockchain
         const hashBuffer = Buffer.from(fileHash.replace('0x', ''), 'hex');
-        
-        // Issue on-chain certificate
-        blockchainResult = await blockchainService.issueCertificate(
-          hashBuffer,
-          verdict,
-          Math.round(score)
-        );
-
+        blockchainResult = await blockchainService.issueCertificate(hashBuffer, verdict, Math.round(score));
         certificateId = blockchainResult.certificateId || certificateId;
         console.log('✅ Blockchain certificate issued:', blockchainResult.transactionHash);
-      } catch (blockchainError) {
-        console.error('⚠️ Blockchain issuance failed, using off-chain:', blockchainError.message);
+      } catch (err) {
+        console.error('⚠️ Blockchain failed:', err.message);
       }
     }
 
-    // Create certificate record
     const certificate = new Certificate({
       id: certificateId,
       scanId,
@@ -64,82 +59,49 @@ router.post('/generate', auth, async (req, res) => {
         network: blockchainResult.network,
         explorerUrl: blockchainResult.explorerUrl,
         onChain: true
-      } : {
-        onChain: false,
-        reason: 'Blockchain not available'
-      }
+      } : { onChain: false, reason: 'Blockchain not available' }
     });
 
     await certificate.save();
-
-    res.json({
-      success: true,
-      certificate: {
-        id: certificate.id,
-        scanId: certificate.scanId,
-        filename: certificate.filename,
-        fileHash: certificate.fileHash,
-        verdict: certificate.verdict,
-        score: certificate.score,
-        timestamp: certificate.timestamp,
-        blockchain: certificate.blockchain,
-        verificationUrl: blockchainResult?.explorerUrl || null
-      }
-    });
-
+    res.json({ success: true, certificate });
   } catch (error) {
     console.error('Certificate generation error:', error);
-    res.status(500).json({ message: 'Failed to generate certificate', error: error.message });
+    res.status(500).json({ message: 'Failed to generate certificate' });
   }
 });
 
 /**
- * GET /api/certificate/:id
- * Get certificate details
+ * GET /api/certificate/list
  */
-router.get('/:id', async (req, res) => {
+router.get('/list', auth, async (req, res) => {
   try {
-    const certificate = await Certificate.findOne({ id: req.params.id });
-
-    if (!certificate) {
-      return res.status(404).json({ message: 'Certificate not found' });
-    }
-
-    res.json({ certificate });
+    const certificates = await Certificate.find({ userId: req.userId }).sort({ timestamp: -1 }).limit(50);
+    res.json({ success: true, certificates });
   } catch (error) {
-    console.error('Certificate fetch error:', error);
-    res.status(500).json({ message: 'Failed to fetch certificate' });
+    res.status(500).json({ message: 'Failed to fetch certificates' });
   }
 });
 
 /**
  * GET /api/certificate/verify/:id
- * Verify a certificate (can include on-chain verification)
  */
 router.get('/verify/:id', async (req, res) => {
   try {
     const certificate = await Certificate.findOne({ id: req.params.id });
-
     if (!certificate) {
-      return res.status(404).json({ 
-        verified: false, 
-        message: 'Certificate not found' 
-      });
+      return res.status(404).json({ verified: false, message: 'Certificate not found' });
     }
 
     let onChainVerified = false;
-    let onChainData = null;
-
-    // If certificate is on-chain, verify it
-    if (certificate.blockchain?.onChain && certificate.blockchain?.transactionHash) {
+    if (certificate.blockchain?.onChain) {
       try {
         const blockchainAvailable = await blockchainService.initialize();
         if (blockchainAvailable) {
-          onChainData = await blockchainService.verifyCertificate(certificate.id);
-          onChainVerified = onChainData.exists;
+          const onChainData = await blockchainService.verifyCertificate(certificate.id);
+          onChainVerified = onChainData?.exists || false;
         }
-      } catch (error) {
-        console.error('On-chain verification failed:', error.message);
+      } catch (err) {
+        console.error('On-chain verify failed:', err.message);
       }
     }
 
@@ -158,75 +120,60 @@ router.get('/verify/:id', async (req, res) => {
         verified: onChainVerified,
         transactionHash: certificate.blockchain?.transactionHash,
         explorerUrl: certificate.blockchain?.explorerUrl,
-        onChainData
+        network: certificate.blockchain?.network
       }
     });
   } catch (error) {
-    console.error('Certificate verification error:', error);
     res.status(500).json({ message: 'Verification failed' });
   }
 });
 
 /**
- * GET /api/certificate/user/list
- * Get all certificates for the authenticated user
+ * POST /api/certificate/verify
  */
-router.get('/user/list', auth, async (req, res) => {
+router.post('/verify', upload.single('file'), async (req, res) => {
+  let filePath = null;
   try {
-    const certificates = await Certificate.find({ userId: req.userId })
-      .sort({ timestamp: -1 })
-      .limit(50);
+    const { certificateId, clientHash } = req.body;
+    if (!certificateId) return res.status(400).json({ message: 'Certificate ID required' });
 
-    res.json({ certificates });
+    const certificate = await Certificate.findOne({ id: certificateId });
+    if (!certificate) return res.status(404).json({ verified: false, message: 'Not found' });
+
+    let computedHash = clientHash;
+    if (req.file) {
+      filePath = req.file.path;
+      const fileBuffer = fs.readFileSync(filePath);
+      computedHash = '0x' + crypto.createHash('sha256').update(fileBuffer).digest('hex');
+      fs.unlinkSync(filePath);
+      filePath = null;
+    }
+
+    if (!computedHash) return res.status(400).json({ message: 'File or hash required' });
+
+    const hashMatch = certificate.fileHash.toLowerCase() === computedHash.toLowerCase();
+
+    res.json({
+      verified: hashMatch,
+      certificate: { id: certificate.id, filename: certificate.filename, verdict: certificate.verdict, score: certificate.score, timestamp: certificate.timestamp, storedHash: certificate.fileHash },
+      verification: { hashMatch, storedHash: certificate.fileHash, providedHash: computedHash, onChain: certificate.blockchain?.onChain || false, onChainVerified: hashMatch }
+    });
   } catch (error) {
-    console.error('Certificate list error:', error);
-    res.status(500).json({ message: 'Failed to fetch certificates' });
+    if (filePath && fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    res.status(500).json({ message: 'Verification failed' });
   }
 });
 
 /**
- * GET /api/certificate/stats
- * Get blockchain statistics
+ * GET /api/certificate/:id
  */
-router.get('/stats/overview', auth, async (req, res) => {
+router.get('/:id', async (req, res) => {
   try {
-    const blockchainAvailable = await blockchainService.initialize();
-    
-    let stats = {
-      blockchainConnected: blockchainAvailable,
-      totalOnChain: 0,
-      walletBalance: '0',
-      network: 'Not connected'
-    };
-
-    if (blockchainAvailable) {
-      try {
-        stats.totalOnChain = await blockchainService.getTotalCertificates();
-        stats.walletBalance = await blockchainService.getBalance();
-        stats.network = blockchainService.networkConfig.name;
-      } catch (error) {
-        console.error('Stats fetch error:', error.message);
-      }
-    }
-
-    // Get local stats
-    const localStats = await Certificate.aggregate([
-      { $match: { userId: req.userId } },
-      { $group: {
-        _id: null,
-        total: { $sum: 1 },
-        onChain: { $sum: { $cond: ['$blockchain.onChain', 1, 0] } }
-      }}
-    ]);
-
-    res.json({
-      ...stats,
-      userCertificates: localStats[0]?.total || 0,
-      userOnChain: localStats[0]?.onChain || 0
-    });
+    const certificate = await Certificate.findOne({ id: req.params.id });
+    if (!certificate) return res.status(404).json({ message: 'Not found' });
+    res.json({ success: true, certificate });
   } catch (error) {
-    console.error('Stats error:', error);
-    res.status(500).json({ message: 'Failed to fetch stats' });
+    res.status(500).json({ message: 'Failed to fetch certificate' });
   }
 });
 

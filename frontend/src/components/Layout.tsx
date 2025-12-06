@@ -14,6 +14,7 @@ export default function Layout() {
   const navItems = [
     { path: '/dashboard', label: 'Dashboard', icon: '📊' },
     { path: '/dashboard/scan', label: 'Deepfake Scan', icon: '🔍' },
+    { path: '/dashboard/certificates', label: 'Certificates', icon: '📜' },
   ]
 
   return (

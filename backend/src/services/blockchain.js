@@ -171,15 +171,29 @@ class BlockchainService {
   }
 
   /**
-   * Verify a certificate by ID
+   * Verify a certificate by ID - fetch from blockchain
    */
   async verifyCertificate(certId) {
     if (!this.initialized) {
-      await this.initialize();
+      const init = await this.initialize();
+      if (!init) return { exists: false };
     }
 
     try {
-      const result = await this.contract.verifyCertificate(certId);
+      // Handle both string and bytes32 formats
+      let certIdBytes = certId;
+      if (typeof certId === 'string' && !certId.startsWith('0x')) {
+        // If it's a UUID, hash it to get bytes32
+        const crypto = require('crypto');
+        certIdBytes = '0x' + crypto.createHash('sha256').update(certId).digest('hex');
+      }
+
+      const exists = await this.contract.certificateExists(certIdBytes);
+      if (!exists) {
+        return { exists: false };
+      }
+
+      const result = await this.contract.verifyCertificate(certIdBytes);
       return {
         exists: true,
         fileHash: result[0],
@@ -189,10 +203,8 @@ class BlockchainService {
         issuer: result[4]
       };
     } catch (error) {
-      if (error.message.includes('does not exist')) {
-        return { exists: false };
-      }
-      throw error;
+      console.error('Certificate verification error:', error.message);
+      return { exists: false, error: error.message };
     }
   }
 
