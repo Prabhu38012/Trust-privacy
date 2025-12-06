@@ -1,7 +1,6 @@
 """Training script for deepfake detection model"""
 
 import os
-import sys
 import argparse
 from pathlib import Path
 import torch
@@ -97,8 +96,15 @@ def validate(model, loader, criterion, device):
     try:
         from sklearn.metrics import roc_auc_score
         auc = roc_auc_score(all_labels, all_preds)
-    except:
+    except (ImportError, ValueError):
         auc = 0.0
+    
+    # Print label distribution for debugging
+    all_labels_np = np.array(all_labels)
+    all_preds_np = np.array(all_preds)
+    print(f"  Label distribution: {np.sum(all_labels_np == 0)} real, {np.sum(all_labels_np == 1)} fake")
+    print(f"  Pred mean for real: {np.mean(all_preds_np[all_labels_np == 0]):.3f}")
+    print(f"  Pred mean for fake: {np.mean(all_preds_np[all_labels_np == 1]):.3f}")
     
     return total_loss / len(loader), accuracy, auc
 
@@ -107,6 +113,10 @@ def train(args):
     """Main training function"""
     print("=" * 60)
     print("TrustLock - Deepfake Detection Model Training")
+    print("=" * 60)
+    print("\n⚠️  IMPORTANT: Label Convention")
+    print("   - REAL images → label 0 → model output < 0.5")
+    print("   - FAKE images → label 1 → model output > 0.5")
     print("=" * 60)
     
     # Setup

@@ -38,6 +38,19 @@ interface ScanResult {
   processingTime: number
 }
 
+// Helper function for score color classes
+function getScoreColorClass(score: number): string {
+  if (score < 0.3) return 'text-emerald-400'
+  if (score < 0.6) return 'text-amber-400'
+  return 'text-rose-400'
+}
+
+function getScoreBgClass(score: number): string {
+  if (score < 0.3) return 'bg-emerald-500'
+  if (score < 0.6) return 'bg-amber-500'
+  return 'bg-rose-500'
+}
+
 export default function DeepfakeScan() {
   const [file, setFile] = useState<File | null>(null)
   const [isDragging, setIsDragging] = useState(false)
@@ -124,7 +137,7 @@ export default function DeepfakeScan() {
 
   const formatVerdict = (verdict?: string) => {
     if (!verdict) return 'UNKNOWN'
-    return verdict.replace(/_/g, ' ')
+    return verdict.split('_').join(' ')
   }
 
   const generateCertificate = async () => {
@@ -170,6 +183,17 @@ export default function DeepfakeScan() {
     }
   }
 
+  const handleUploadZoneClick = () => {
+    document.getElementById('fileInput')?.click()
+  }
+
+  const handleUploadZoneKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      document.getElementById('fileInput')?.click()
+    }
+  }
+
   return (
     <div className="space-y-8">
       <div>
@@ -181,9 +205,15 @@ export default function DeepfakeScan() {
       {!scanResult && (
         <div className="glass-card rounded-2xl p-8">
           <div
-            onDragEnter={handleDragIn} onDragLeave={handleDragOut} onDragOver={handleDrag} onDrop={handleDrop}
+            role="button"
+            tabIndex={0}
+            onDragEnter={handleDragIn}
+            onDragLeave={handleDragOut}
+            onDragOver={handleDrag}
+            onDrop={handleDrop}
+            onClick={handleUploadZoneClick}
+            onKeyDown={handleUploadZoneKeyDown}
             className={`upload-zone border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-all ${isDragging ? 'dragging border-primary-500' : 'border-white/10'}`}
-            onClick={() => document.getElementById('fileInput')?.click()}
           >
             <input id="fileInput" type="file" accept="video/*,image/*" onChange={handleFileSelect} className="hidden" />
             <div className="w-16 h-16 mx-auto mb-4 rounded-2xl bg-gradient-to-br from-primary-500/20 to-cyan-500/20 flex items-center justify-center">
@@ -212,7 +242,7 @@ export default function DeepfakeScan() {
       )}
 
       {/* Results Section */}
-      {scanResult && scanResult.result && (
+      {scanResult?.result && (
         <div className="space-y-6">
           {/* Mode Badge */}
           {scanResult.result.metadata?.mode && (
@@ -256,28 +286,34 @@ export default function DeepfakeScan() {
             <div className="glass-card rounded-2xl p-6">
               <h3 className="text-xl font-semibold text-white mb-6">Analyzed Frames ({scanResult.result.frames_analyzed || scanResult.result.frames.length})</h3>
               <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                {scanResult.result.frames.map((frame) => (
-                  <div key={frame.frame_number} className="glass rounded-xl overflow-hidden hover:-translate-y-1 transition-all">
-                    <div className="aspect-video relative">
-                      {frame.image && <img src={`data:image/png;base64,${frame.image}`} alt={`Frame ${frame.frame_number}`} className="w-full h-full object-cover" />}
-                      <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white">#{frame.frame_number}</div>
-                    </div>
-                    <div className="p-3">
-                      <div className="flex justify-between items-center">
-                        <span className="text-gray-400 text-xs">Score</span>
-                        <span className={`text-sm font-medium ${(frame.deepfake_probability || 0) < 0.3 ? 'text-emerald-400' : (frame.deepfake_probability || 0) < 0.6 ? 'text-amber-400' : 'text-rose-400'}`}>
-                          {((frame.deepfake_probability || 0) * 100).toFixed(1)}%
-                        </span>
+                {scanResult.result.frames.map((frame) => {
+                  const probability = frame.deepfake_probability || 0
+                  const scoreColor = getScoreColorClass(probability)
+                  const scoreBg = getScoreBgClass(probability)
+                  
+                  return (
+                    <div key={frame.frame_number} className="glass rounded-xl overflow-hidden hover:-translate-y-1 transition-all">
+                      <div className="aspect-video relative">
+                        {frame.image && <img src={`data:image/png;base64,${frame.image}`} alt={`Frame ${frame.frame_number}`} className="w-full h-full object-cover" />}
+                        <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 rounded text-xs text-white">#{frame.frame_number}</div>
                       </div>
-                      <div className="mt-2 h-1.5 bg-dark-600 rounded-full overflow-hidden">
-                        <div 
-                          className={`h-full rounded-full ${(frame.deepfake_probability || 0) < 0.3 ? 'bg-emerald-500' : (frame.deepfake_probability || 0) < 0.6 ? 'bg-amber-500' : 'bg-rose-500'}`} 
-                          style={{ width: `${(frame.deepfake_probability || 0) * 100}%` }} 
-                        />
+                      <div className="p-3">
+                        <div className="flex justify-between items-center">
+                          <span className="text-gray-400 text-xs">Score</span>
+                          <span className={`text-sm font-medium ${scoreColor}`}>
+                            {(probability * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                        <div className="mt-2 h-1.5 bg-dark-600 rounded-full overflow-hidden">
+                          <div 
+                            className={`h-full rounded-full ${scoreBg}`} 
+                            style={{ width: `${probability * 100}%` }} 
+                          />
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             </div>
           )}
@@ -300,11 +336,24 @@ export default function DeepfakeScan() {
   )
 }
 
-function MetricCard({ label, value, isGood = false }: { label: string; value: number; isGood?: boolean }) {
-  const getColor = () => {
-    if (isGood) return value > 70 ? 'text-emerald-400' : value > 40 ? 'text-amber-400' : 'text-rose-400'
-    return value < 30 ? 'text-emerald-400' : value < 60 ? 'text-amber-400' : 'text-rose-400'
+interface MetricCardProps {
+  readonly label: string
+  readonly value: number
+  readonly isGood?: boolean
+}
+
+function MetricCard({ label, value, isGood = false }: MetricCardProps) {
+  const getColor = (): string => {
+    if (isGood) {
+      if (value > 70) return 'text-emerald-400'
+      if (value > 40) return 'text-amber-400'
+      return 'text-rose-400'
+    }
+    if (value < 30) return 'text-emerald-400'
+    if (value < 60) return 'text-amber-400'
+    return 'text-rose-400'
   }
+  
   return (
     <div className="glass rounded-xl p-4">
       <p className="text-gray-400 text-xs mb-1">{label}</p>

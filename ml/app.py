@@ -1,8 +1,8 @@
+# pylint: disable=no-member
 import os
 import subprocess
 import base64
 import uuid
-import sys
 from pathlib import Path
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -29,8 +29,10 @@ MODELS_FOLDER.mkdir(exist_ok=True)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device: {device}")
 
-# Face detection
+# Face detection - try multiple cascades for better detection
 face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+face_cascade_alt = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_alt2.xml')
+profile_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_profileface.xml')
 
 # ============================================================
 # TRAINED MODEL
@@ -64,16 +66,33 @@ class DeepfakeDetector(nn.Module):
 TRAINED_MODEL_PATH = MODELS_FOLDER / "deepfake_detector.pth"
 PRODUCTION_MODE = TRAINED_MODEL_PATH.exists()
 
+# Flag to invert scores if model was trained with opposite labels
+INVERT_SCORES = True
+
+# Calibration: boost uncertain scores toward clearer decisions
+# More aggressive settings for under-trained models (1 epoch)
+# Reduce these values after training with more epochs
+CALIBRATION = {
+    "enabled": True,
+    "fake_boost_threshold": 0.38,  # Very aggressive - for 1 epoch model
+    "real_boost_threshold": 0.32,  # Push real scores lower
+    "boost_strength": 1.6,         # Strong boost for under-trained model
+    "epochs_trained": 1,           # Track this - reduce boost when epochs increase
+}
+
 if PRODUCTION_MODE:
     print(f"✅ Loading trained model: {TRAINED_MODEL_PATH}")
     model = DeepfakeDetector()
     model.load_state_dict(torch.load(TRAINED_MODEL_PATH, map_location=device, weights_only=True))
     model.eval().to(device)
     print("✅ TRAINED MODEL LOADED")
+    print(f"   Score inversion: {'ENABLED' if INVERT_SCORES else 'DISABLED'}")
+    print(f"   Calibration: {'ENABLED' if CALIBRATION['enabled'] else 'DISABLED'}")
 else:
     print("⚠️ No trained model, using base model")
     model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.IMAGENET1K_V1)
     model.eval().to(device)
+    INVERT_SCORES = False
 
 preprocess = transforms.Compose([
     transforms.Resize((224, 224)),
@@ -87,20 +106,20 @@ preprocess = transforms.Compose([
 class GradCAM:
     """Grad-CAM implementation for deepfake detection visualization"""
     
-    def __init__(self, model, target_layer):
-        self.model = model
-        self.target_layer = target_layer
+    def __init__(self, nn_model, layer):
+        self.model = nn_model
+        self.target_layer = layer
         self.gradients = None
         self.activations = None
         
         # Register hooks
-        target_layer.register_forward_hook(self._forward_hook)
-        target_layer.register_full_backward_hook(self._backward_hook)
+        layer.register_forward_hook(self._forward_hook)
+        layer.register_full_backward_hook(self._backward_hook)
     
-    def _forward_hook(self, module, input, output):
+    def _forward_hook(self, _module, _input, output):
         self.activations = output.detach()
     
-    def _backward_hook(self, module, grad_input, grad_output):
+    def _backward_hook(self, _module, _grad_input, grad_output):
         self.gradients = grad_output[0].detach()
     
     def generate(self, input_tensor, target_class=None):
@@ -110,8 +129,8 @@ class GradCAM:
         # Forward pass
         output = self.model(input_tensor)
         
-        if target_class is None:
-            target_class = (output > 0).float()
+        # target_class parameter reserved for future use
+        _ = target_class
         
         # Backward pass
         self.model.zero_grad()
@@ -134,14 +153,14 @@ class GradCAM:
         
         return cam
 
-def get_gradcam_target_layer(model):
+def get_gradcam_target_layer(nn_model):
     """Get the target layer for Grad-CAM"""
     if PRODUCTION_MODE:
         # For our custom model, use last conv layer of backbone
-        return model.backbone.features[-1]
+        return nn_model.backbone.features[-1]
     else:
         # For base EfficientNet
-        return model.features[-1]
+        return nn_model.features[-1]
 
 # Initialize Grad-CAM
 try:
@@ -149,7 +168,7 @@ try:
     gradcam = GradCAM(model, target_layer)
     GRADCAM_AVAILABLE = True
     print("✅ Grad-CAM initialized")
-except Exception as e:
+except (AttributeError, RuntimeError) as e:
     print(f"⚠️ Grad-CAM init failed: {e}")
     GRADCAM_AVAILABLE = False
     gradcam = None
@@ -184,7 +203,7 @@ def generate_heatmap(input_tensor, original_image):
         heatmap_base64 = base64.b64encode(buf.getvalue()).decode()
         
         return heatmap_base64
-    except Exception as e:
+    except (RuntimeError, ValueError) as e:
         print(f"Heatmap generation error: {e}")
         return None
 
@@ -206,19 +225,34 @@ def generate_heatmap_only(input_tensor, size=(224, 224)):
         buf = io.BytesIO()
         heatmap_pil.save(buf, format='PNG')
         return base64.b64encode(buf.getvalue()).decode()
-    except:
+    except (RuntimeError, ValueError):
         return None
 
 # ============================================================
 # FACE EXTRACTION & ANALYSIS
 # ============================================================
+def _detect_faces_with_cascade(gray, cascade, scales):
+    """Try to detect faces with given cascade and scales."""
+    for scale in scales:
+        faces = cascade.detectMultiScale(gray, scale, 4, minSize=(40, 40))
+        if len(faces) > 0:
+            return faces
+    return []
+
 def extract_face(image, margin=0.4):
+    """Extract face with multiple cascade fallbacks for better detection."""
     img_array = np.array(image)
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-    for scale in [1.05, 1.1, 1.2, 1.3]:
-        faces = face_cascade.detectMultiScale(gray, scale, 4, minSize=(50, 50))
-        if len(faces) > 0:
-            break
+    
+    # Try different cascades
+    faces = _detect_faces_with_cascade(gray, face_cascade, [1.05, 1.1, 1.15, 1.2])
+    
+    if len(faces) == 0:
+        faces = _detect_faces_with_cascade(gray, face_cascade_alt, [1.05, 1.1, 1.2])
+    
+    if len(faces) == 0:
+        faces = _detect_faces_with_cascade(gray, profile_cascade, [1.1, 1.2, 1.3])
+    
     if len(faces) > 0:
         x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
         x1 = max(0, int(x - w * margin))
@@ -226,41 +260,62 @@ def extract_face(image, margin=0.4):
         x2 = min(image.width, int(x + w + w * margin))
         y2 = min(image.height, int(y + h + h * margin))
         return image.crop((x1, y1, x2, y2)), True, (x, y, w, h)
+    
+    # No face found - use center crop
     w, h = image.size
     m = min(w, h)
     return image.crop(((w-m)//2, (h-m)//2, (w+m)//2, (h+m)//2)), False, None
+
+def _run_model_inference(input_tensor):
+    """Run model inference and return score with calibration."""
+    if PRODUCTION_MODE:
+        output = model(input_tensor)
+        raw_score = torch.sigmoid(output).item()
+        nn_score = 1.0 - raw_score if INVERT_SCORES else raw_score
+        
+        # Apply calibration - more aggressive for under-trained models
+        if CALIBRATION["enabled"]:
+            # For 1-epoch model, be very aggressive
+            if nn_score > CALIBRATION["fake_boost_threshold"]:
+                # Boost toward fake
+                excess = nn_score - CALIBRATION["fake_boost_threshold"]
+                nn_score = CALIBRATION["fake_boost_threshold"] + excess * CALIBRATION["boost_strength"]
+            elif nn_score < CALIBRATION["real_boost_threshold"]:
+                # Boost toward real  
+                deficit = CALIBRATION["real_boost_threshold"] - nn_score
+                nn_score = CALIBRATION["real_boost_threshold"] - deficit * CALIBRATION["boost_strength"]
+        
+        # Clamp to valid range
+        nn_score = max(0.08, min(0.92, nn_score))
+        return nn_score, raw_score
+    else:
+        features = model.features(input_tensor)
+        pooled = torch.nn.functional.adaptive_avg_pool2d(features, 1).flatten()
+        nn_score = 0.3 + (pooled.std().item() * 0.5)
+        return nn_score, nn_score
+
+def _calculate_confidence(nn_score, face_detected):
+    """Calculate confidence and adjust score based on face detection."""
+    base_confidence = abs(nn_score - 0.5) * 2 * 100
+    if face_detected:
+        confidence = max(60, min(95, 50 + base_confidence))
+        return confidence, nn_score
+    # Lower confidence when no face detected
+    confidence = max(30, min(60, 30 + base_confidence * 0.5))
+    adjusted_score = nn_score * 0.7 + 0.35 * 0.3
+    return confidence, adjusted_score
 
 def analyze_frame(frame_path, generate_heatmap_flag=False):
     """Analyze frame with optional Grad-CAM heatmap"""
     try:
         img = Image.open(frame_path).convert("RGB")
-        face_img, face_detected, face_box = extract_face(img)
-        
-        if not face_detected:
-            return {
-                "deepfake_probability": 0.35,
-                "confidence": 25.0,
-                "face_detected": False,
-                "heatmap": None,
-                "heatmap_overlay": None,
-                "details": {"neural_network": 0.35, "note": "no_face_detected"}
-            }
+        face_img, face_detected, _ = extract_face(img)
         
         input_tensor = preprocess(face_img).unsqueeze(0).to(device)
         input_tensor.requires_grad = True
         
         with torch.enable_grad():
-            if PRODUCTION_MODE:
-                output = model(input_tensor)
-                nn_score = torch.sigmoid(output).item()
-                if nn_score > 0.90:
-                    nn_score = 0.80
-                elif nn_score < 0.10:
-                    nn_score = 0.20
-            else:
-                features = model.features(input_tensor)
-                pooled = torch.nn.functional.adaptive_avg_pool2d(features, 1).flatten()
-                nn_score = 0.3 + (pooled.std().item() * 0.5)
+            nn_score, raw_score = _run_model_inference(input_tensor)
         
         # Generate heatmaps if requested
         heatmap_base64 = None
@@ -272,21 +327,25 @@ def analyze_frame(frame_path, generate_heatmap_flag=False):
             heatmap_base64 = generate_heatmap_only(input_tensor_grad, (face_img.width, face_img.height))
             heatmap_overlay_base64 = generate_heatmap(input_tensor_grad, face_img)
         
-        confidence = abs(nn_score - 0.5) * 2 * 100
-        confidence = max(60, min(95, 50 + confidence))
+        confidence, final_score = _calculate_confidence(nn_score, face_detected)
+        
+        # Build details dict
+        details = {"neural_network": round(final_score, 3)}
+        if PRODUCTION_MODE:
+            details["raw_score"] = round(raw_score, 3)
         
         return {
-            "deepfake_probability": float(np.clip(nn_score, 0, 1)),
+            "deepfake_probability": float(np.clip(final_score, 0, 1)),
             "confidence": float(confidence),
             "face_detected": face_detected,
             "heatmap": heatmap_base64,
             "heatmap_overlay": heatmap_overlay_base64,
-            "details": {"neural_network": round(nn_score, 3)}
+            "details": details
         }
-    except Exception as e:
+    except (IOError, RuntimeError) as e:
         print(f"Error: {e}")
         traceback.print_exc()
-        return {"deepfake_probability": 0.35, "confidence": 25.0, "face_detected": False, "heatmap": None, "details": {}}
+        return {"deepfake_probability": 0.5, "confidence": 20.0, "face_detected": False, "heatmap": None, "details": {}}
 
 def image_to_base64(path, max_size=400):
     try:
@@ -297,20 +356,20 @@ def image_to_base64(path, max_size=400):
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         return base64.b64encode(buf.getvalue()).decode()
-    except:
+    except (IOError, OSError):
         return ""
 
 def find_ffmpeg():
     try:
         subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
         return "ffmpeg"
-    except:
+    except (FileNotFoundError, subprocess.CalledProcessError):
         for pkg in Path(os.path.expanduser(r"~\AppData\Local\Microsoft\WinGet\Packages")).glob("Gyan.FFmpeg*"):
             for exe in pkg.rglob("ffmpeg.exe"):
                 try:
                     subprocess.run([str(exe), "-version"], capture_output=True, check=True)
                     return str(exe)
-                except:
+                except (FileNotFoundError, subprocess.CalledProcessError):
                     pass
     return None
 
@@ -319,10 +378,10 @@ print(f"FFmpeg: {'Yes' if FFMPEG else 'No'}")
 
 def extract_frames(video, out_dir, fps=1):
     out_dir.mkdir(parents=True, exist_ok=True)
-    subprocess.run([FFMPEG, "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(out_dir / "frame_%04d.png"), "-y"], capture_output=True)
+    subprocess.run([FFMPEG, "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(out_dir / "frame_%04d.png"), "-y"], capture_output=True, check=False)
     return sorted(out_dir.glob("frame_*.png"))
 
-def get_explanation(score, details):
+def get_explanation(score):
     """Generate explanation text based on analysis"""
     if score > 0.70:
         return "High likelihood of manipulation detected. The model identified suspicious patterns in facial features, skin texture, or boundary regions that are commonly associated with deepfake generation techniques."
@@ -334,6 +393,161 @@ def get_explanation(score, details):
         return "Low likelihood of manipulation. Most facial features appear natural and consistent with authentic video content."
     else:
         return "Content appears authentic. No significant signs of deepfake manipulation detected. Natural facial features and consistent lighting/texture observed."
+
+# ============================================================
+# DETECTION HELPERS
+# ============================================================
+def _load_frames(video_path, ext, frames_dir):
+    """Load frames from image or video file."""
+    frames = []
+    if ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}:
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        fp = frames_dir / "frame_0001.png"
+        Image.open(video_path).convert("RGB").save(fp)
+        frames = [fp]
+    elif ext in {".mp4", ".avi", ".mov", ".mkv", ".webm"} and FFMPEG:
+        frames = extract_frames(video_path, frames_dir)
+        if len(frames) > 30:
+            idx = np.linspace(0, len(frames)-1, 30, dtype=int)
+            frames = [frames[i] for i in idx]
+    return frames
+
+def _analyze_all_frames(frames):
+    """Analyze all frames and return results."""
+    results, all_scores, face_scores = [], [], []
+    
+    for i, fp in enumerate(frames):
+        analysis = analyze_frame(fp, generate_heatmap_flag=False)
+        score = analysis["deepfake_probability"]
+        face_detected = analysis.get("face_detected", True)
+        
+        indicator = _get_indicator(score)
+        face_icon = "👤" if face_detected else "⚠️"
+        print(f"  Frame {i+1}/{len(frames)}: {score*100:.1f}% {indicator} {face_icon}")
+        
+        results.append({
+            "frame_number": i + 1,
+            "frame_path": str(fp),
+            "image": image_to_base64(fp),
+            "deepfake_probability": score,
+            "confidence": analysis["confidence"],
+            "face_detected": face_detected,
+            "heatmap": None,
+            "heatmap_overlay": None,
+            "details": analysis.get("details", {})
+        })
+        all_scores.append(score)
+        if face_detected:
+            face_scores.append((i, score))
+    
+    return results, all_scores, face_scores
+
+def _get_indicator(score):
+    """Get status indicator for score."""
+    if score > 0.65:
+        return "🔴 FAKE"
+    if score > 0.40:
+        return "🟡 UNCERTAIN"
+    return "🟢 REAL"
+
+def _add_heatmaps_to_results(results, face_scores, generate_heatmaps):
+    """Generate and add heatmaps for top suspicious frames."""
+    if not generate_heatmaps or not face_scores:
+        return
+    
+    top_frames = sorted(face_scores, key=lambda x: x[1], reverse=True)[:3]
+    print(f"\n  [Generating heatmaps for top {len(top_frames)} frames]")
+    
+    for idx, _ in top_frames:
+        fp = Path(results[idx]["frame_path"])
+        if fp.exists():
+            analysis_with_heatmap = analyze_frame(fp, generate_heatmap_flag=True)
+            results[idx]["heatmap"] = analysis_with_heatmap.get("heatmap")
+            results[idx]["heatmap_overlay"] = analysis_with_heatmap.get("heatmap_overlay")
+            print(f"    Frame {idx+1}: Heatmap generated ✓")
+
+def _remove_outliers(scores_array):
+    """Remove outliers using IQR method."""
+    if len(scores_array) < 5:
+        return scores_array
+    q1, q3 = np.percentile(scores_array, [25, 75])
+    iqr = q3 - q1
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    filtered = scores_array[(scores_array >= lower_bound) & (scores_array <= upper_bound)]
+    return filtered if len(filtered) >= 3 else scores_array
+
+def _compute_score_ratios(scores_array):
+    """Compute fake/real score ratios."""
+    total = len(scores_array)
+    if total == 0:
+        return 0, 0, 0
+    high_fake = sum(1 for s in scores_array if s > 0.48)
+    medium_fake = sum(1 for s in scores_array if s > 0.40)
+    high_real = sum(1 for s in scores_array if s < 0.30)
+    return high_fake / total, medium_fake / total, high_real / total
+
+def _compute_weighted_final(scores_array, fake_ratio, medium_fake_ratio, real_ratio):
+    """Compute weighted final score based on distribution."""
+    avg = float(np.mean(scores_array))
+    med = float(np.median(scores_array))
+    p75 = float(np.percentile(scores_array, 75))
+    p90 = float(np.percentile(scores_array, 90))
+    
+    if fake_ratio > 0.15 or medium_fake_ratio > 0.50:
+        final = avg * 0.1 + p75 * 0.3 + p90 * 0.4 + med * 0.2
+        return max(final, 0.55)
+    if real_ratio > 0.45:
+        p25 = float(np.percentile(scores_array, 25))
+        final = avg * 0.3 + med * 0.4 + p25 * 0.3
+        return min(final, 0.32)
+    if medium_fake_ratio > 0.35:
+        final = avg * 0.2 + p75 * 0.5 + med * 0.3
+        return max(final, 0.50)
+    return avg * 0.5 + med * 0.3 + p75 * 0.2
+
+def _calculate_final_score(all_scores, face_scores):
+    """Calculate final deepfake score with outlier removal."""
+    # Prefer face-detected frames
+    if len(face_scores) >= 3:
+        scores_for_analysis = [s for _, s in face_scores]
+    else:
+        valid_scores = [s for s in all_scores if abs(s - 0.35) > 0.01]
+        scores_for_analysis = valid_scores if len(valid_scores) >= 3 else all_scores
+    
+    if not scores_for_analysis:
+        return 0.5, 0.5, 0.5, 0.5, 0.0
+    
+    scores_array = np.array(scores_for_analysis)
+    scores_array = _remove_outliers(scores_array)
+    
+    avg = float(np.mean(scores_array))
+    mx = float(np.max(scores_array))
+    med = float(np.median(scores_array))
+    std = float(np.std(scores_array))
+    
+    fake_ratio, medium_fake_ratio, real_ratio = _compute_score_ratios(scores_array)
+    final = _compute_weighted_final(scores_array, fake_ratio, medium_fake_ratio, real_ratio)
+    
+    return float(np.clip(final, 0, 1)), avg, mx, med, std
+
+def _get_verdict(final, std):
+    """Determine verdict and confidence from final score."""
+    if final < 0.28:
+        verdict, conf = "AUTHENTIC", "HIGH"
+    elif final < 0.40:
+        verdict, conf = "LIKELY_AUTHENTIC", "MEDIUM"
+    elif final < 0.48:
+        verdict, conf = "UNCERTAIN", "LOW"
+    elif final < 0.62:
+        verdict, conf = "SUSPICIOUS", "MEDIUM"
+    else:
+        verdict, conf = "LIKELY_DEEPFAKE", "HIGH"
+    
+    if std > 0.15:
+        conf = "LOW"
+    
+    return verdict, conf
 
 # ============================================================
 # API ROUTES
@@ -361,7 +575,6 @@ def detect():
         if not file or not file.filename:
             return jsonify({"error": "No file"}), 400
         
-        # Check if heatmaps requested
         generate_heatmaps = request.form.get("heatmaps", "true").lower() == "true"
         
         print(f"\n[SCAN] {file.filename}")
@@ -372,117 +585,26 @@ def detect():
         file.save(video_path)
         
         frames_dir = FRAMES_FOLDER / job_id
-        frames = []
-        
-        if ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}:
-            frames_dir.mkdir(parents=True, exist_ok=True)
-            fp = frames_dir / "frame_0001.png"
-            Image.open(video_path).convert("RGB").save(fp)
-            frames = [fp]
-        elif ext in {".mp4", ".avi", ".mov", ".mkv", ".webm"} and FFMPEG:
-            frames = extract_frames(video_path, frames_dir)
-            if len(frames) > 30:
-                idx = np.linspace(0, len(frames)-1, 30, dtype=int)
-                frames = [frames[i] for i in idx]
+        frames = _load_frames(video_path, ext, frames_dir)
         
         if not frames:
             return jsonify({"error": "Cannot process"}), 400
         
-        results, all_scores, face_scores = [], [], []
+        results, all_scores, face_scores = _analyze_all_frames(frames)
+        _add_heatmaps_to_results(results, face_scores, generate_heatmaps)
         
-        for i, fp in enumerate(frames):
-            # Generate heatmaps only for analysis (will select top 3 later)
-            analysis = analyze_frame(fp, generate_heatmap_flag=False)
-            score = analysis["deepfake_probability"]
-            face_detected = analysis.get("face_detected", True)
-            
-            indicator = "🔴 FAKE" if score > 0.65 else "🟡 UNCERTAIN" if score > 0.40 else "🟢 REAL"
-            face_icon = "👤" if face_detected else "❌"
-            print(f"  Frame {i+1}/{len(frames)}: {score*100:.1f}% {indicator} {face_icon}")
-            
-            results.append({
-                "frame_number": i + 1,
-                "frame_path": str(fp),
-                "image": image_to_base64(fp),
-                "deepfake_probability": score,
-                "confidence": analysis["confidence"],
-                "face_detected": face_detected,
-                "heatmap": None,
-                "heatmap_overlay": None,
-                "details": analysis.get("details", {})
-            })
-            all_scores.append(score)
-            if face_detected:
-                face_scores.append((i, score))
-        
-        # Generate heatmaps for top 3 suspicious frames
-        if generate_heatmaps and len(face_scores) > 0:
-            # Sort by score (highest first)
-            top_frames = sorted(face_scores, key=lambda x: x[1], reverse=True)[:3]
-            print(f"\n  [Generating heatmaps for top {len(top_frames)} frames]")
-            
-            for idx, score in top_frames:
-                fp = Path(results[idx]["frame_path"])
-                if fp.exists():
-                    analysis_with_heatmap = analyze_frame(fp, generate_heatmap_flag=True)
-                    results[idx]["heatmap"] = analysis_with_heatmap.get("heatmap")
-                    results[idx]["heatmap_overlay"] = analysis_with_heatmap.get("heatmap_overlay")
-                    print(f"    Frame {idx+1}: Heatmap generated ✓")
-        
-        # Remove frame_path from results (internal use only)
+        # Remove frame_path from results (existing code...)
         for r in results:
             r.pop("frame_path", None)
         
-        # Calculate final score
-        if len(face_scores) >= 5:
-            scores_for_analysis = [s for _, s in face_scores]
-        else:
-            scores_for_analysis = all_scores
-        
-        scores_array = np.array(scores_for_analysis)
-        avg = np.mean(scores_array)
-        mx = np.max(scores_array)
-        med = np.median(scores_array)
-        std = np.std(scores_array)
-        
-        high_fake = sum(1 for s in scores_for_analysis if s > 0.60)
-        high_real = sum(1 for s in scores_for_analysis if s < 0.38)
-        total = len(scores_for_analysis)
-        
-        fake_ratio = high_fake / total
-        real_ratio = high_real / total
-        
-        if fake_ratio > 0.35:
-            final = avg * 0.3 + mx * 0.4 + med * 0.3
-            final = max(final, 0.58)
-        elif real_ratio > 0.35:
-            final = avg * 0.5 + med * 0.5
-            final = min(final, 0.42)
-        else:
-            final = avg * 0.5 + med * 0.3 + mx * 0.2
-        
-        final = np.clip(final, 0, 1)
-        
-        # Verdict
-        if final < 0.32:
-            verdict, conf = "AUTHENTIC", "HIGH"
-        elif final < 0.45:
-            verdict, conf = "LIKELY_AUTHENTIC", "MEDIUM"
-        elif final < 0.55:
-            verdict, conf = "UNCERTAIN", "LOW"
-        elif final < 0.70:
-            verdict, conf = "SUSPICIOUS", "HIGH"
-        else:
-            verdict, conf = "LIKELY_DEEPFAKE", "VERY HIGH"
-        
-        if std > 0.20:
-            conf = "LOW"
-        
-        # Generate explanation
-        explanation = get_explanation(final, {})
+        final, avg, mx, med, std = _calculate_final_score(all_scores, face_scores)
+        verdict, conf = _get_verdict(final, std)
+        explanation = get_explanation(final)
         
         print(f"\n[RESULT] {verdict} ({final*100:.1f}%)")
         print(f"[EXPLANATION] {explanation[:80]}...")
+        
+        top_suspicious = [i+1 for i, _ in sorted(face_scores, key=lambda x: x[1], reverse=True)[:3]] if face_scores else []
         
         return jsonify({
             "jobId": job_id,
@@ -494,7 +616,7 @@ def detect():
                 "explanation": explanation,
                 "frames_analyzed": len(results),
                 "frames": results,
-                "top_suspicious_frames": [i+1 for i, _ in sorted(face_scores, key=lambda x: x[1], reverse=True)[:3]] if face_scores else [],
+                "top_suspicious_frames": top_suspicious,
                 "analysis_summary": {
                     "average_score": round(avg * 100, 1),
                     "max_score": round(mx * 100, 1),
@@ -509,7 +631,7 @@ def detect():
                 }
             }
         })
-    except Exception as e:
+    except (IOError, RuntimeError, ValueError) as e:
         print(f"[ERROR] {e}")
         traceback.print_exc()
         return jsonify({"error": str(e)}), 500

@@ -2,38 +2,74 @@
 node_modules/
 __pycache__/
 *.pyc
-.env
-.venv/
+.pyo
+*.pyd
+.Python
+env/
 venv/
+.venv/
+pip-log.txt
+pip-delete-this-directory.txt
 
-# Build
+# Build outputs
 dist/
 build/
 *.egg-info/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Environment files
+.env
+.env.local
+.env.*.local
 
 # Logs
+logs/
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
-.idea/
-
-# ML Model files (too large)
-*.pth
-*.pt
-*.h5
-*.pkl
-*.onnx
+# ML - Model files (large binary files)
 ml/models/*.pth
+ml/models/*.pt
+ml/models/*.bin
+ml/models/*.onnx
+ml/models/*.h5
+
+# ML - Training checkpoints
 ml/train/checkpoints/
+ml/train/checkpoints/*.pth
+
+# ML - Training data (large datasets)
 ml/train/data/
+ml/data/
+
+# ML - Temporary processing folders
 ml/uploads/
 ml/frames/
 
-# Uploads
-uploads/
-frames/
+# Frontend build
+frontend/dist/
+frontend/build/
+frontend/.next/
+
+# Backend
+backend/uploads/
+backend/logs/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
