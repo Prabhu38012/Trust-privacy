@@ -16,6 +16,7 @@ import traceback
 import cv2
 import io
 
+<<<<<<< HEAD
 # Day 6: Document analysis imports
 try:
     import piexif
@@ -42,6 +43,8 @@ except ImportError:
     OCR_READER = None
     print("⚠️ easyocr not installed - OCR disabled")
 
+=======
+>>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 app = Flask(__name__)
 CORS(app)
 
@@ -53,6 +56,7 @@ FRAMES_FOLDER.mkdir(exist_ok=True)
 MODELS_FOLDER.mkdir(exist_ok=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+<<<<<<< HEAD
 
 # Day 6: Load Document Fraud CNN model if available
 DOCUMENT_CNN_MODEL = None
@@ -72,6 +76,8 @@ try:
         print("⚠️ Document Fraud CNN not found - run train_document_model.py first")
 except Exception as e:
     print(f"⚠️ Could not load Document Fraud CNN: {e}")
+=======
+>>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 print(f"Device: {device}")
 
 # Face detection - try multiple cascades for better detection
@@ -426,6 +432,7 @@ def extract_frames(video, out_dir, fps=1):
     subprocess.run([FFMPEG, "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(out_dir / "frame_%04d.png"), "-y"], capture_output=True, check=False)
     return sorted(out_dir.glob("frame_*.png"))
 
+<<<<<<< HEAD
 # ============================================================
 # DAY 6: ERROR LEVEL ANALYSIS (ELA)
 # ============================================================
@@ -1027,6 +1034,8 @@ def detect_multiple_documents(gray):
         return 0
 
 
+=======
+>>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 def get_explanation(score):
     """Generate explanation text based on analysis"""
     if score > 0.70:
@@ -1211,6 +1220,7 @@ def index():
 def health():
     return jsonify({"status": "ok", "production": PRODUCTION_MODE, "gradcam": GRADCAM_AVAILABLE})
 
+<<<<<<< HEAD
 @app.route("/analyze-document", methods=["POST"])
 def analyze_document():
     """
@@ -1422,6 +1432,8 @@ def analyze_document():
             file_path.unlink()
 
 
+=======
+>>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 @app.route("/detect", methods=["POST"])
 def detect():
     job_id = str(uuid.uuid4())
@@ -1498,11 +1510,18 @@ def detect():
 
 if __name__ == "__main__":
     print("\n" + "=" * 50)
+<<<<<<< HEAD
     print("TrustLock Deepfake Detection - Day 6")
     print("=" * 50)
     print(f"Mode: {'PRODUCTION' if PRODUCTION_MODE else 'DEMO'}")
     print(f"Grad-CAM: {'✅ Enabled' if GRADCAM_AVAILABLE else '❌ Disabled'}")
     print(f"EXIF: {'✅ Enabled' if PIEXIF_AVAILABLE else '❌ Disabled'}")
     print(f"PDF: {'✅ Enabled' if PDF2IMAGE_AVAILABLE else '❌ Disabled'}")
+=======
+    print("TrustLock Deepfake Detection - Day 3")
+    print("=" * 50)
+    print(f"Mode: {'PRODUCTION' if PRODUCTION_MODE else 'DEMO'}")
+    print(f"Grad-CAM: {'✅ Enabled' if GRADCAM_AVAILABLE else '❌ Disabled'}")
+>>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
     print("=" * 50 + "\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
