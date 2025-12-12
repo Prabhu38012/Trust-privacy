@@ -7,8 +7,5 @@ numpy>=2.0.0
 python-dotenv
 gunicorn
 opencv-python
-<<<<<<< HEAD
 pdf2image
 piexif
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81

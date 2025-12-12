@@ -6,10 +6,7 @@ import Login from './pages/Auth/Login'
 import Signup from './pages/Auth/Signup'
 import Dashboard from './pages/Dashboard'
 import DeepfakeScan from './pages/DeepfakeScan'
-<<<<<<< HEAD
 import DocumentAnalysis from './pages/DocumentAnalysis'
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 import Certificate from './pages/Certificate'
 import Admin from './pages/Admin'
 import Settings from './pages/Settings'
@@ -41,10 +38,7 @@ function App() {
       >
         <Route index element={<Dashboard />} />
         <Route path="scan" element={<DeepfakeScan />} />
-<<<<<<< HEAD
-        <Route path="document" element={<DocumentAnalysis />} />
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
+        <Route path="document-analysis" element={<DocumentAnalysis />} />
         <Route path="certificate" element={<Certificate />} />
         <Route path="admin" element={<Admin />} />
         <Route path="settings" element={<Settings />} />
@@ -57,3 +51,4 @@ function App() {
 }
 
 export default App
+

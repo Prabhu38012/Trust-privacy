@@ -12,11 +12,7 @@ const generateTokens = (userId) => {
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN || '15m' }
   );
-<<<<<<< HEAD
-
-=======
   
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
   const refreshToken = jwt.sign(
     { id: userId },
     process.env.JWT_REFRESH_SECRET,

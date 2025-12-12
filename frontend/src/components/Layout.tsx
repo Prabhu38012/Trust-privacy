@@ -14,6 +14,7 @@ export default function Layout() {
   const navItems = [
     { path: '/dashboard', label: 'Dashboard', icon: '📊' },
     { path: '/dashboard/scan', label: 'Deepfake Scan', icon: '🔍' },
+    { path: '/dashboard/document-analysis', label: 'Document Analysis', icon: '📄' },
     { path: '/dashboard/certificates', label: 'Certificates', icon: '📜' },
   ]
 
@@ -37,11 +38,10 @@ export default function Layout() {
                   <Link
                     key={item.path}
                     to={item.path}
-                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
-                      location.pathname === item.path
+                    className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${location.pathname === item.path
                         ? 'bg-white/10 text-white'
                         : 'text-gray-400 hover:text-white hover:bg-white/5'
-                    }`}
+                      }`}
                   >
                     <span className="mr-2">{item.icon}</span>
                     {item.label}
@@ -49,7 +49,7 @@ export default function Layout() {
                 ))}
               </nav>
             </div>
-            
+
             <nav className="flex items-center space-x-4">
               <span className="text-sm text-gray-400">{user?.email}</span>
               <button

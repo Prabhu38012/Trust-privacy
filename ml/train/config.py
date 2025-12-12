@@ -10,11 +10,7 @@ CONFIG = {
     "image_size": 224,
     # Training
     "batch_size": 32,
-<<<<<<< HEAD
-    "epochs": 1,
-=======
     "epochs": 20,
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
     "learning_rate": 1e-4,
     "weight_decay": 1e-5,
     # Labels convention:

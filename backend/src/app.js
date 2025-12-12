@@ -11,6 +11,7 @@ const userRoutes = require('./routes/user');
 const scanRoutes = require('./routes/scan');
 const certificateRoutes = require('./routes/certificate');
 const reportRoutes = require('./routes/report');
+const documentRoutes = require('./routes/document');
 
 const app = express();
 
@@ -27,23 +28,23 @@ if (process.env.NODE_ENV === 'production') {
 
 // CORS - Allow all localhost origins in development
 app.use(cors({
-  origin: function(origin, callback) {
+  origin: function (origin, callback) {
     // Allow requests with no origin (mobile apps, curl, etc)
     if (!origin) return callback(null, true);
-    
+
     // Allow localhost on any port in development
     if (process.env.NODE_ENV === 'development') {
       if (origin.includes('localhost') || origin.includes('127.0.0.1')) {
         return callback(null, true);
       }
     }
-    
+
     // Production whitelist
     const allowedOrigins = ['https://your-frontend-domain.com'];
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
-    
+
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
@@ -64,6 +65,7 @@ app.use('/api/user', userRoutes);
 app.use('/api/scan', scanRoutes);
 app.use('/api/certificate', certificateRoutes);
 app.use('/api/report', reportRoutes);
+app.use('/api/document', documentRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

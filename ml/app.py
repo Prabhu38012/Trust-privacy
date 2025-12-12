@@ -11,40 +11,27 @@ import torch.nn as nn
 import torchvision.transforms as transforms
 from torchvision import models
 from PIL import Image
+from PIL.ExifTags import TAGS, GPSTAGS
 import numpy as np
 import traceback
 import cv2
 import io
 
-<<<<<<< HEAD
-# Day 6: Document analysis imports
-try:
-    import piexif
-    PIEXIF_AVAILABLE = True
-except ImportError:
-    PIEXIF_AVAILABLE = False
-    print("⚠️ piexif not installed - EXIF extraction disabled")
-
+# Optional imports for document analysis
 try:
     from pdf2image import convert_from_path
-    PDF2IMAGE_AVAILABLE = True
+    PDF_SUPPORT = True
 except ImportError:
-    PDF2IMAGE_AVAILABLE = False
-    print("⚠️ pdf2image not installed - PDF conversion disabled")
+    PDF_SUPPORT = False
+    print("⚠️ pdf2image not available - PDF support disabled")
 
-# Day 6 Enhancement: OCR for text extraction
 try:
-    import easyocr
-    OCR_READER = easyocr.Reader(['en'], gpu=False, verbose=False)
-    OCR_AVAILABLE = True
-    print("✅ EasyOCR initialized")
+    import piexif
+    EXIF_SUPPORT = True
 except ImportError:
-    OCR_AVAILABLE = False
-    OCR_READER = None
-    print("⚠️ easyocr not installed - OCR disabled")
+    EXIF_SUPPORT = False
+    print("⚠️ piexif not available - detailed EXIF editing detection disabled")
 
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 app = Flask(__name__)
 CORS(app)
 
@@ -56,28 +43,6 @@ FRAMES_FOLDER.mkdir(exist_ok=True)
 MODELS_FOLDER.mkdir(exist_ok=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-<<<<<<< HEAD
-
-# Day 6: Load Document Fraud CNN model if available
-DOCUMENT_CNN_MODEL = None
-DOCUMENT_CNN_AVAILABLE = False
-try:
-    from train_document_model import DocumentFraudCNN, get_transforms
-    doc_model_path = MODELS_FOLDER / "document_fraud_model.pth"
-    if doc_model_path.exists():
-        DOCUMENT_CNN_MODEL = DocumentFraudCNN(num_classes=2, pretrained=False)
-        checkpoint = torch.load(doc_model_path, map_location=device)
-        DOCUMENT_CNN_MODEL.load_state_dict(checkpoint['model_state_dict'])
-        DOCUMENT_CNN_MODEL = DOCUMENT_CNN_MODEL.to(device)
-        DOCUMENT_CNN_MODEL.eval()
-        DOCUMENT_CNN_AVAILABLE = True
-        print(f"✅ Document Fraud CNN loaded (Val Acc: {checkpoint.get('val_acc', 0):.1f}%)")
-    else:
-        print("⚠️ Document Fraud CNN not found - run train_document_model.py first")
-except Exception as e:
-    print(f"⚠️ Could not load Document Fraud CNN: {e}")
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 print(f"Device: {device}")
 
 # Face detection - try multiple cascades for better detection
@@ -432,610 +397,6 @@ def extract_frames(video, out_dir, fps=1):
     subprocess.run([FFMPEG, "-i", str(video), "-vf", f"fps={fps}", "-q:v", "2", str(out_dir / "frame_%04d.png"), "-y"], capture_output=True, check=False)
     return sorted(out_dir.glob("frame_*.png"))
 
-<<<<<<< HEAD
-# ============================================================
-# DAY 6: ERROR LEVEL ANALYSIS (ELA)
-# ============================================================
-def generate_ela(image_path, quality=90, amplification=15):
-    """
-    Generate Error Level Analysis image to detect tampering.
-    ELA works by re-saving the image at a known quality level and
-    comparing it to the original. Edited areas show different error levels.
-    
-    Args:
-        image_path: Path to the image file
-        quality: JPEG quality for resave (default 90)
-        amplification: Factor to amplify differences (default 15)
-    
-    Returns:
-        dict with ela_image (base64), brightness_std, and suspect_regions
-    """
-    try:
-        # Open original image
-        original = Image.open(image_path).convert('RGB')
-        original_np = np.array(original)
-        
-        # Re-save at specified quality
-        buffer = io.BytesIO()
-        original.save(buffer, format='JPEG', quality=quality)
-        buffer.seek(0)
-        resaved = Image.open(buffer).convert('RGB')
-        resaved_np = np.array(resaved)
-        
-        # Compute absolute difference
-        diff = np.abs(original_np.astype(np.float32) - resaved_np.astype(np.float32))
-        
-        # Amplify the differences
-        ela = np.clip(diff * amplification, 0, 255).astype(np.uint8)
-        
-        # Convert to grayscale for analysis
-        ela_gray = cv2.cvtColor(ela, cv2.COLOR_RGB2GRAY)
-        
-        # Calculate statistics for tamper detection
-        brightness_std = float(np.std(ela_gray))
-        brightness_mean = float(np.mean(ela_gray))
-        
-        # Find high-contrast regions (potential edits)
-        threshold = np.percentile(ela_gray, 95)
-        suspect_mask = ela_gray > threshold
-        suspect_percentage = float(np.sum(suspect_mask) / suspect_mask.size * 100)
-        
-        # Create colored ELA visualization
-        ela_colored = cv2.applyColorMap(ela_gray, cv2.COLORMAP_JET)
-        ela_colored = cv2.cvtColor(ela_colored, cv2.COLOR_BGR2RGB)
-        
-        # Convert to base64
-        ela_pil = Image.fromarray(ela_colored)
-        buf = io.BytesIO()
-        ela_pil.save(buf, format='PNG')
-        ela_base64 = base64.b64encode(buf.getvalue()).decode()
-        
-        # Also provide raw ELA (grayscale amplified)
-        ela_raw_pil = Image.fromarray(ela)
-        buf_raw = io.BytesIO()
-        ela_raw_pil.save(buf_raw, format='PNG')
-        ela_raw_base64 = base64.b64encode(buf_raw.getvalue()).decode()
-        
-        return {
-            "ela_image": ela_base64,
-            "ela_raw": ela_raw_base64,
-            "brightness_std": round(brightness_std, 2),
-            "brightness_mean": round(brightness_mean, 2),
-            "suspect_percentage": round(suspect_percentage, 2),
-            "quality_used": quality,
-            "amplification": amplification
-        }
-    except Exception as e:
-        print(f"ELA generation error: {e}")
-        traceback.print_exc()
-        return None
-
-
-def get_ela_interpretation(ela_result):
-    """
-    Interpret ELA results to provide human-readable analysis.
-    """
-    if not ela_result:
-        return "ELA analysis could not be performed."
-    
-    std = ela_result.get("brightness_std", 0)
-    suspect = ela_result.get("suspect_percentage", 0)
-    
-    indicators = []
-    tamper_score = 0
-    
-    # High standard deviation indicates non-uniform compression
-    if std > 25:
-        indicators.append("High variation in compression artifacts detected")
-        tamper_score += 30
-    elif std > 15:
-        indicators.append("Moderate variation in compression artifacts")
-        tamper_score += 15
-    
-    # High suspect percentage indicates potential edits
-    if suspect > 5:
-        indicators.append(f"{suspect:.1f}% of image shows high error levels")
-        tamper_score += 25
-    elif suspect > 2:
-        indicators.append(f"Small regions ({suspect:.1f}%) show elevated error levels")
-        tamper_score += 10
-    
-    if tamper_score >= 40:
-        verdict = "HIGH LIKELIHOOD of tampering"
-    elif tamper_score >= 20:
-        verdict = "MODERATE signs of potential editing"
-    else:
-        verdict = "LOW likelihood of tampering"
-    
-    explanation = f"{verdict}. " + "; ".join(indicators) if indicators else f"{verdict}. Image appears to have uniform compression."
-    
-    return explanation
-
-
-# ============================================================
-# DAY 6: EXIF METADATA EXTRACTION
-# ============================================================
-EDITING_SOFTWARE_SIGNATURES = [
-    "photoshop", "gimp", "lightroom", "capture one", "affinity",
-    "pixelmator", "paint.net", "corel", "acdsee", "photoscape",
-    "snapseed", "vsco", "afterlight", "facetune", "faceapp",
-    "remini", "lensa", "prisma", "meitu", "beautycam"
-]
-
-
-def extract_exif_metadata(image_path):
-    """
-    Extract EXIF metadata from image and detect editing software.
-    
-    Returns:
-        dict with camera info, software, timestamps, and tamper indicators
-    """
-    result = {
-        "camera": None,
-        "software": None,
-        "date_time_original": None,
-        "date_time_digitized": None,
-        "date_time_modified": None,
-        "gps_info": None,
-        "editing_detected": False,
-        "editing_software": [],
-        "tamper_indicators": [],
-        "all_tags": {}
-    }
-    
-    if not PIEXIF_AVAILABLE:
-        result["tamper_indicators"].append("EXIF extraction unavailable")
-        return result
-    
-    try:
-        exif_dict = piexif.load(str(image_path))
-        
-        # Extract from 0th IFD (main image)
-        if "0th" in exif_dict:
-            ifd = exif_dict["0th"]
-            
-            # Camera make and model
-            make = ifd.get(piexif.ImageIFD.Make, b"").decode("utf-8", errors="ignore").strip()
-            model = ifd.get(piexif.ImageIFD.Model, b"").decode("utf-8", errors="ignore").strip()
-            if make or model:
-                result["camera"] = f"{make} {model}".strip()
-            
-            # Software used
-            software = ifd.get(piexif.ImageIFD.Software, b"").decode("utf-8", errors="ignore").strip()
-            if software:
-                result["software"] = software
-                result["all_tags"]["Software"] = software
-                
-                # Check for editing software
-                software_lower = software.lower()
-                for sig in EDITING_SOFTWARE_SIGNATURES:
-                    if sig in software_lower:
-                        result["editing_detected"] = True
-                        result["editing_software"].append(software)
-                        result["tamper_indicators"].append(f"Editing software detected: {software}")
-                        break
-            
-            # DateTime
-            dt = ifd.get(piexif.ImageIFD.DateTime, b"").decode("utf-8", errors="ignore").strip()
-            if dt:
-                result["date_time_modified"] = dt
-                result["all_tags"]["DateTime"] = dt
-        
-        # Extract from Exif IFD
-        if "Exif" in exif_dict:
-            exif_ifd = exif_dict["Exif"]
-            
-            # Original date taken
-            dto = exif_ifd.get(piexif.ExifIFD.DateTimeOriginal, b"").decode("utf-8", errors="ignore").strip()
-            if dto:
-                result["date_time_original"] = dto
-                result["all_tags"]["DateTimeOriginal"] = dto
-            
-            # Digitized date
-            dtd = exif_ifd.get(piexif.ExifIFD.DateTimeDigitized, b"").decode("utf-8", errors="ignore").strip()
-            if dtd:
-                result["date_time_digitized"] = dtd
-                result["all_tags"]["DateTimeDigitized"] = dtd
-        
-        # Check for timestamp inconsistencies
-        timestamps = [result["date_time_original"], result["date_time_digitized"], result["date_time_modified"]]
-        timestamps = [t for t in timestamps if t]
-        if len(set(timestamps)) > 1:
-            result["tamper_indicators"].append("Inconsistent timestamps detected")
-        
-        # Check for missing EXIF (common in edited images)
-        if not result["camera"] and not result["date_time_original"]:
-            result["tamper_indicators"].append("Missing camera EXIF data (may indicate editing)")
-        
-        # GPS info
-        if "GPS" in exif_dict and exif_dict["GPS"]:
-            result["gps_info"] = "GPS coordinates present"
-            result["all_tags"]["GPS"] = "Present"
-        
-    except Exception as e:
-        print(f"EXIF extraction error: {e}")
-        result["tamper_indicators"].append(f"EXIF read error: {str(e)[:50]}")
-    
-    return result
-
-
-# ============================================================
-# DAY 6: PDF TO IMAGE CONVERSION
-# ============================================================
-def convert_pdf_to_images(pdf_path, dpi=150, max_pages=5):
-    """
-    Convert PDF pages to images for analysis.
-    
-    Args:
-        pdf_path: Path to PDF file
-        dpi: Resolution for conversion (default 150)
-        max_pages: Maximum pages to convert (default 5)
-    
-    Returns:
-        list of PIL Image objects
-    """
-    if not PDF2IMAGE_AVAILABLE:
-        print("PDF conversion not available - pdf2image not installed")
-        return []
-    
-    # Poppler path for Windows
-    poppler_path = None
-    possible_paths = [
-        r"C:\poppler\poppler-24.02.0\Library\bin",
-        r"C:\Program Files\poppler\Library\bin",
-        r"C:\poppler\bin"
-    ]
-    for path in possible_paths:
-        if Path(path).exists():
-            poppler_path = path
-            break
-    
-    try:
-        # Convert PDF to images
-        images = convert_from_path(
-            pdf_path,
-            dpi=dpi,
-            first_page=1,
-            last_page=max_pages,
-            poppler_path=poppler_path
-        )
-        print(f"Converted {len(images)} pages from PDF")
-        return images
-    except Exception as e:
-        print(f"PDF conversion error: {e}")
-        traceback.print_exc()
-        return []
-
-
-# ============================================================
-# DAY 6 ENHANCEMENT: DOCUMENT FRAUD DETECTION
-# ============================================================
-
-# Keywords that indicate sample/specimen/fake documents
-SAMPLE_KEYWORDS = [
-    "sample", "specimen", "void", "not valid", "for demonstration",
-    "example", "test", "demo", "dummy", "fake", "template",
-    "not for official use", "invalid", "cancelled", "facsimile"
-]
-
-# Common document types and their expected patterns
-DOCUMENT_TYPES = {
-    "drivers_license": ["driver", "license", "licence", "dl", "class", "dob", "exp", "iss"],
-    "passport": ["passport", "nationality", "surname", "given names", "date of birth"],
-    "id_card": ["identification", "id card", "national id", "citizen"],
-    "certificate": ["certificate", "certify", "awarded", "completed", "achievement"],
-    "invoice": ["invoice", "bill", "total", "amount due", "payment"],
-    "bank_statement": ["bank", "statement", "balance", "transaction", "account"]
-}
-
-# Suspicious patterns in documents
-SUSPICIOUS_PATTERNS = [
-    "123456789",  # Sequential numbers
-    "000000000",  # All zeros
-    "111111111",  # Repeated digits
-    "john doe", "jane doe",  # Placeholder names
-    "123 main st", "123 main street",  # Placeholder addresses
-    "anytown", "anycity", "anystate",  # Placeholder locations
-    "xx/xx/xxxx", "00/00/0000",  # Placeholder dates
-]
-
-
-def detect_document_fraud(image_path):
-    """
-    Analyze document for signs of fraud using multiple heuristics + CNN.
-    
-    Returns:
-        dict with fraud indicators, document type, and authenticity score
-    """
-    result = {
-        "document_type": "unknown",
-        "document_type_confidence": 0,
-        "is_sample_specimen": False,
-        "fraud_indicators": [],
-        "authenticity_score": 100,  # Start at 100, deduct for issues
-        "text_detected": [],
-        "analysis_details": {},
-        "cnn_prediction": None,
-        "cnn_confidence": 0
-    }
-    
-    try:
-        # Load image
-        img = Image.open(image_path).convert('RGB')
-        img_np = np.array(img)
-        gray = cv2.cvtColor(img_np, cv2.COLOR_RGB2GRAY)
-        
-        # CNN Prediction (if model available)
-        if DOCUMENT_CNN_AVAILABLE and DOCUMENT_CNN_MODEL is not None:
-            try:
-                transform = get_transforms(is_training=False)
-                img_tensor = transform(img).unsqueeze(0).to(device)
-                
-                with torch.no_grad():
-                    logits = DOCUMENT_CNN_MODEL(img_tensor)
-                    probs = torch.softmax(logits, dim=1)
-                
-                prob_real = probs[0][0].item()
-                prob_fake = probs[0][1].item()
-                
-                result["cnn_prediction"] = "AUTHENTIC" if prob_real > prob_fake else "FRAUDULENT"
-                result["cnn_confidence"] = max(prob_real, prob_fake)
-                
-                print(f"  [CNN] Prediction: {result['cnn_prediction']} ({result['cnn_confidence']*100:.1f}%)")
-                
-                # Adjust score based on CNN - lower thresholds for better detection
-                if prob_fake > 0.6:
-                    result["authenticity_score"] -= 50
-                    result["fraud_indicators"].append(f"CNN detected fraud ({prob_fake*100:.0f}% confidence)")
-                    result["is_sample_specimen"] = True  # Flag as fraud
-                elif prob_fake > 0.5:
-                    result["authenticity_score"] -= 30
-                    result["fraud_indicators"].append(f"CNN suspects fraud ({prob_fake*100:.0f}% confidence)")
-                    
-            except Exception as cnn_error:
-                print(f"  [CNN] Error: {cnn_error}")
-        
-        # 0. Check filename for suspicious keywords (normalize hyphens/underscores)
-        filename_normalized = str(image_path).lower().replace("-", " ").replace("_", " ")
-        filename_keywords = ["fake", "fraud", "forged", "counterfeit", "phony", 
-                            "sample", "specimen", "template", "dark web", "darkweb",
-                            "illegal", "scam", "false", "bogus", "identity documents"]
-        for keyword in filename_keywords:
-            if keyword in filename_normalized:
-                result["fraud_indicators"].append(f"Suspicious filename keyword: '{keyword}'")
-                result["authenticity_score"] -= 30
-                if keyword in ["fake", "fraud", "forged", "counterfeit", "dark web", "identity documents"]:
-                    result["is_sample_specimen"] = True
-        
-        # 1. Text extraction using OCR
-        extracted_text = extract_text_regions(gray)
-        result["text_detected"] = extracted_text[:10]  # Limit for response size
-        
-        # 2. Check for sample/specimen keywords in OCR text
-        text_lower = " ".join(extracted_text).lower()
-        for keyword in SAMPLE_KEYWORDS:
-            if keyword in text_lower:
-                result["is_sample_specimen"] = True
-                result["fraud_indicators"].append(f"Sample/specimen keyword detected: '{keyword}'")
-                result["authenticity_score"] -= 40
-                break
-        
-        # 3. Check for suspicious patterns
-        for pattern in SUSPICIOUS_PATTERNS:
-            if pattern in text_lower:
-                result["fraud_indicators"].append(f"Suspicious pattern detected: '{pattern}'")
-                result["authenticity_score"] -= 15
-        
-        # 4. Detect document type
-        doc_type, confidence = classify_document_type(text_lower)
-        result["document_type"] = doc_type
-        result["document_type_confidence"] = confidence
-        
-        # 5. Visual analysis for document authenticity
-        visual_score, visual_issues = analyze_document_visuals(img_np, gray)
-        result["authenticity_score"] -= visual_score
-        result["fraud_indicators"].extend(visual_issues)
-        
-        # 6. Check image quality and resolution
-        quality_issues = check_image_quality(img, gray)
-        result["fraud_indicators"].extend(quality_issues)
-        result["authenticity_score"] -= len(quality_issues) * 5
-        
-        # 7. Detect multiple documents in one image (suspicious for ID theft)
-        multi_doc_score = detect_multiple_documents(gray)
-        if multi_doc_score > 0:
-            result["fraud_indicators"].append(f"Multiple document regions detected ({multi_doc_score})")
-            result["authenticity_score"] -= multi_doc_score * 10
-        
-        # Ensure score is in valid range
-        result["authenticity_score"] = max(0, min(100, result["authenticity_score"]))
-        
-        # Determine verdict
-        if result["is_sample_specimen"]:
-            result["verdict"] = "LIKELY_FRAUDULENT"
-        elif result["authenticity_score"] < 40:
-            result["verdict"] = "LIKELY_FRAUDULENT"
-        elif result["authenticity_score"] < 70:
-            result["verdict"] = "SUSPICIOUS"
-        else:
-            result["verdict"] = "LIKELY_AUTHENTIC"
-        
-    except Exception as e:
-        print(f"Document fraud detection error: {e}")
-        traceback.print_exc()
-        result["fraud_indicators"].append(f"Analysis error: {str(e)[:50]}")
-    
-    return result
-
-
-def extract_text_regions(gray_image):
-    """
-    Extract text from image using EasyOCR.
-    Returns list of detected text strings.
-    """
-    extracted = []
-    
-    try:
-        if OCR_AVAILABLE and OCR_READER is not None:
-            # Use EasyOCR for real text extraction
-            # Convert grayscale to RGB if needed (easyocr expects RGB or grayscale)
-            results = OCR_READER.readtext(gray_image, detail=0, paragraph=True)
-            extracted.extend(results)
-            print(f"  [OCR] Extracted {len(results)} text blocks")
-            if results:
-                # Show first few detected texts for debugging
-                preview = [t[:30] for t in results[:5]]
-                print(f"  [OCR] Preview: {preview}")
-        else:
-            # Fallback: visual analysis only
-            print("  [OCR] Not available, using visual analysis")
-            
-    except Exception as e:
-        print(f"  [OCR] Error: {e}")
-    
-    return extracted
-
-
-def classify_document_type(text_content):
-    """
-    Classify document type based on detected text patterns.
-    """
-    best_match = "unknown"
-    best_score = 0
-    
-    for doc_type, keywords in DOCUMENT_TYPES.items():
-        score = sum(1 for kw in keywords if kw in text_content)
-        if score > best_score:
-            best_score = score
-            best_match = doc_type
-    
-    confidence = min(100, best_score * 25) if best_score > 0 else 0
-    return best_match, confidence
-
-
-def analyze_document_visuals(img_np, gray):
-    """
-    Analyze visual characteristics of document for authenticity.
-    """
-    issues = []
-    penalty = 0
-    
-    try:
-        # 1. Check for uniform background (real IDs have security patterns)
-        edges = cv2.Canny(gray, 50, 150)
-        edge_density = np.sum(edges > 0) / edges.size
-        
-        if edge_density < 0.02:
-            issues.append("Very low edge density - may be digitally created")
-            penalty += 10
-        
-        # 2. Check color distribution
-        if len(img_np.shape) == 3:
-            color_std = np.std(img_np, axis=(0, 1))
-            if np.mean(color_std) < 20:
-                issues.append("Unusually uniform colors")
-                penalty += 5
-        
-        # 3. Check for repeated patterns (copy-paste detection)
-        # Simplified version - check for exact pixel matches
-        h, w = gray.shape
-        if h > 100 and w > 100:
-            top_region = gray[:h//4, :]
-            bottom_region = gray[3*h//4:, :]
-            
-            if np.allclose(top_region[:min(50, h//4)], bottom_region[:min(50, h//4)], atol=5):
-                issues.append("Repeated patterns detected")
-                penalty += 15
-        
-        # 4. Check for straight rectangular borders (may indicate screenshot)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if len(contours) == 1:
-            approx = cv2.approxPolyDP(contours[0], 0.02 * cv2.arcLength(contours[0], True), True)
-            if len(approx) == 4:
-                issues.append("Perfect rectangular border - may be screenshot/scan")
-                penalty += 5
-                
-    except Exception as e:
-        print(f"Visual analysis error: {e}")
-    
-    return penalty, issues
-
-
-def check_image_quality(img, gray):
-    """
-    Check image quality metrics that may indicate manipulation.
-    """
-    issues = []
-    
-    try:
-        w, h = img.size
-        
-        # Very low resolution
-        if w < 300 or h < 200:
-            issues.append("Very low resolution image")
-        
-        # Unusual aspect ratio for documents
-        aspect = w / h
-        if aspect > 4 or aspect < 0.25:
-            issues.append("Unusual aspect ratio for document")
-        
-        # Check for JPEG artifacts (block patterns)
-        if w >= 8 and gray.shape[0] >= 8:
-            block_std = np.std([
-                np.std(gray[i:i+8, j:j+8]) 
-                for i in range(0, gray.shape[0]-8, 8) 
-                for j in range(0, gray.shape[1]-8, 8)
-            ][:100])  # Sample first 100 blocks
-            
-            if block_std < 5:
-                issues.append("Unusual compression patterns")
-                
-    except Exception as e:
-        print(f"Quality check error: {e}")
-    
-    return issues
-
-
-def detect_multiple_documents(gray):
-    """
-    Detect if image contains multiple documents (suspicious for ID fraud).
-    Returns count of document-like regions found.
-    """
-    try:
-        # Apply edge detection
-        edges = cv2.Canny(gray, 50, 150)
-        
-        # Dilate to connect edges
-        kernel = np.ones((5, 5), np.uint8)
-        dilated = cv2.dilate(edges, kernel, iterations=3)
-        
-        # Find contours
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        
-        # Filter for document-sized rectangles
-        h, w = gray.shape
-        min_area = (h * w) * 0.05  # At least 5% of image
-        max_area = (h * w) * 0.8   # At most 80% of image
-        
-        document_count = 0
-        for contour in contours:
-            area = cv2.contourArea(contour)
-            if min_area < area < max_area:
-                # Check if roughly rectangular
-                approx = cv2.approxPolyDP(contour, 0.02 * cv2.arcLength(contour, True), True)
-                if 4 <= len(approx) <= 8:  # Roughly rectangular
-                    document_count += 1
-        
-        # Only flag if multiple documents found
-        return document_count if document_count > 1 else 0
-        
-    except Exception as e:
-        print(f"Multi-document detection error: {e}")
-        return 0
-
-
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 def get_explanation(score):
     """Generate explanation text based on analysis"""
     if score > 0.70:
@@ -1205,235 +566,395 @@ def _get_verdict(final, std):
     return verdict, conf
 
 # ============================================================
+# DOCUMENT ANALYSIS - ELA, EXIF, PDF
+# ============================================================
+
+def perform_ela(image, quality=90, scale=15):
+    """
+    Perform Error Level Analysis on an image.
+    Compresses the image at specified quality and computes 
+    the difference to reveal tampering.
+    
+    Args:
+        image: PIL Image object
+        quality: JPEG compression quality (lower = more compression)
+        scale: Multiplier to enhance differences
+    
+    Returns:
+        tuple: (ela_image as PIL Image, ela_base64 string)
+    """
+    try:
+        # Convert to RGB if necessary
+        if image.mode != 'RGB':
+            image = image.convert('RGB')
+        
+        # Save at specified quality to buffer
+        buffer = io.BytesIO()
+        image.save(buffer, format='JPEG', quality=quality)
+        buffer.seek(0)
+        
+        # Reload compressed image
+        compressed = Image.open(buffer)
+        
+        # Compute absolute difference
+        original_array = np.array(image, dtype=np.float32)
+        compressed_array = np.array(compressed, dtype=np.float32)
+        
+        diff = np.abs(original_array - compressed_array)
+        
+        # Scale the difference to make it visible
+        diff = diff * scale
+        diff = np.clip(diff, 0, 255).astype(np.uint8)
+        
+        ela_image = Image.fromarray(diff)
+        
+        # Convert to base64
+        ela_buffer = io.BytesIO()
+        ela_image.save(ela_buffer, format='PNG')
+        ela_base64 = base64.b64encode(ela_buffer.getvalue()).decode()
+        
+        return ela_image, ela_base64
+    except Exception as e:
+        print(f"ELA error: {e}")
+        return None, None
+
+def calculate_ela_score(ela_image):
+    """
+    Calculate a tampering score based on ELA analysis.
+    Higher values indicate potential tampering.
+    """
+    try:
+        if ela_image is None:
+            return 0.0
+        
+        ela_array = np.array(ela_image)
+        
+        # Calculate statistics
+        mean_intensity = np.mean(ela_array)
+        max_intensity = np.max(ela_array)
+        std_intensity = np.std(ela_array)
+        
+        # High variance regions indicate potential tampering
+        high_intensity_ratio = np.sum(ela_array > 128) / ela_array.size
+        
+        # Combine metrics into a score (0-1)
+        score = (
+            (mean_intensity / 255) * 0.2 +
+            (max_intensity / 255) * 0.3 +
+            (std_intensity / 128) * 0.3 +
+            high_intensity_ratio * 0.2
+        )
+        
+        return float(np.clip(score, 0, 1))
+    except Exception as e:
+        print(f"ELA score error: {e}")
+        return 0.0
+
+def extract_exif_metadata(image_path):
+    """
+    Extract EXIF metadata from an image and check for suspicious indicators.
+    
+    Returns:
+        dict: Contains metadata, warnings, and suspicious flags
+    """
+    result = {
+        "metadata": {},
+        "warnings": [],
+        "suspicious_indicators": [],
+        "has_exif": False
+    }
+    
+    try:
+        img = Image.open(image_path)
+        exif_data = img._getexif()
+        
+        if exif_data is None:
+            result["warnings"].append("No EXIF metadata found - may have been stripped")
+            return result
+        
+        result["has_exif"] = True
+        
+        # Extract readable EXIF data
+        for tag_id, value in exif_data.items():
+            tag = TAGS.get(tag_id, tag_id)
+            
+            # Handle bytes/binary data
+            if isinstance(value, bytes):
+                try:
+                    value = value.decode('utf-8', errors='ignore')
+                except:
+                    value = str(value)[:100]
+            
+            # Store metadata
+            result["metadata"][tag] = str(value)[:200]  # Limit value length
+            
+            # Check for suspicious indicators
+            tag_lower = str(tag).lower()
+            value_str = str(value).lower()
+            
+            # Check for editing software
+            if tag_lower in ['software', 'processingsoftware']:
+                editing_software = ['photoshop', 'gimp', 'lightroom', 'affinity', 
+                                   'pixlr', 'snapseed', 'picsart', 'canva']
+                for software in editing_software:
+                    if software in value_str:
+                        result["suspicious_indicators"].append(
+                            f"Edited with {value} - image may have been manipulated"
+                        )
+                        break
+            
+            # Check for date inconsistencies
+            if 'date' in tag_lower:
+                result["metadata"][f"_date_{tag}"] = str(value)
+        
+        # Check for GPS data
+        gps_tags = ['GPSInfo', 'GPSLatitude', 'GPSLongitude']
+        has_gps = any(tag in result["metadata"] for tag in gps_tags)
+        if not has_gps:
+            result["warnings"].append("GPS data not present or stripped")
+        
+        # Use piexif for more detailed analysis if available
+        if EXIF_SUPPORT:
+            try:
+                exif_dict = piexif.load(str(image_path))
+                
+                # Check for thumbnail inconsistencies
+                if piexif.ImageIFD.ImageWidth in exif_dict.get("0th", {}):
+                    result["metadata"]["OriginalWidth"] = exif_dict["0th"][piexif.ImageIFD.ImageWidth]
+                if piexif.ImageIFD.ImageLength in exif_dict.get("0th", {}):
+                    result["metadata"]["OriginalHeight"] = exif_dict["0th"][piexif.ImageIFD.ImageLength]
+                
+                # Check if thumbnail exists but is different size
+                if "thumbnail" in exif_dict and exif_dict["thumbnail"]:
+                    result["warnings"].append("Contains embedded thumbnail - verify consistency")
+                    
+            except Exception as e:
+                print(f"piexif analysis error: {e}")
+        
+    except Exception as e:
+        result["warnings"].append(f"Could not read EXIF: {str(e)}")
+    
+    return result
+
+def convert_pdf_to_images(pdf_path, dpi=200, first_page_only=True):
+    """
+    Convert PDF to images using pdf2image.
+    
+    Args:
+        pdf_path: Path to PDF file
+        dpi: Resolution for conversion
+        first_page_only: If True, only convert first page
+    
+    Returns:
+        list: List of PIL Images
+    """
+    if not PDF_SUPPORT:
+        print("PDF support not available")
+        return []
+    
+    try:
+        if first_page_only:
+            images = convert_from_path(str(pdf_path), dpi=dpi, first_page=1, last_page=1)
+        else:
+            images = convert_from_path(str(pdf_path), dpi=dpi)
+        return images
+    except Exception as e:
+        print(f"PDF conversion error: {e}")
+        return []
+
+def get_document_explanation(ela_score, exif_result, tampering_indicators):
+    """
+    Generate explanation text for document analysis.
+    """
+    explanations = []
+    
+    # ELA-based explanation
+    if ela_score > 0.6:
+        explanations.append(
+            "Error Level Analysis reveals significant inconsistencies in the image compression. "
+            "This suggests portions of the image may have been modified or added after initial creation."
+        )
+    elif ela_score > 0.4:
+        explanations.append(
+            "ELA shows moderate variations in compression levels across the image. "
+            "Some regions may have been edited, but results are not conclusive."
+        )
+    elif ela_score > 0.2:
+        explanations.append(
+            "Minor compression inconsistencies detected. The image appears mostly authentic "
+            "with possible minor adjustments."
+        )
+    else:
+        explanations.append(
+            "ELA shows consistent compression levels throughout the image, "
+            "suggesting it has not been significantly manipulated."
+        )
+    
+    # EXIF-based explanation
+    if exif_result.get("suspicious_indicators"):
+        explanations.append(
+            f"Metadata analysis found {len(exif_result['suspicious_indicators'])} suspicious indicator(s): " +
+            "; ".join(exif_result["suspicious_indicators"][:3])
+        )
+    
+    if exif_result.get("warnings"):
+        explanations.append(
+            "Metadata warnings: " + "; ".join(exif_result["warnings"][:2])
+        )
+    
+    return " ".join(explanations)
+
+def analyze_document_tampering(image_path):
+    """
+    Perform comprehensive document tampering analysis.
+    
+    Returns:
+        dict: Complete analysis results
+    """
+    result = {
+        "ela": {
+            "image": None,
+            "score": 0.0
+        },
+        "exif": {
+            "metadata": {},
+            "warnings": [],
+            "suspicious_indicators": [],
+            "has_exif": False
+        },
+        "tampering_indicators": [],
+        "tampering_score": 0.0,
+        "verdict": "UNKNOWN",
+        "explanation": ""
+    }
+    
+    try:
+        # Load image
+        img = Image.open(image_path)
+        original = img.convert('RGB')
+        
+        # Generate original image base64
+        orig_buffer = io.BytesIO()
+        # Resize for display if too large
+        display_img = original.copy()
+        max_size = 800
+        if max(display_img.size) > max_size:
+            ratio = max_size / max(display_img.size)
+            new_size = (int(display_img.width * ratio), int(display_img.height * ratio))
+            display_img = display_img.resize(new_size, Image.Resampling.LANCZOS)
+        display_img.save(orig_buffer, format='PNG')
+        result["original_image"] = base64.b64encode(orig_buffer.getvalue()).decode()
+        
+        # Perform ELA
+        ela_img, ela_base64 = perform_ela(original)
+        if ela_base64:
+            result["ela"]["image"] = ela_base64
+            result["ela"]["score"] = calculate_ela_score(ela_img)
+        
+        # Extract EXIF
+        exif_result = extract_exif_metadata(image_path)
+        result["exif"] = exif_result
+        
+        # Compile tampering indicators
+        tampering_indicators = []
+        
+        if result["ela"]["score"] > 0.5:
+            tampering_indicators.append({
+                "type": "ELA",
+                "severity": "high",
+                "message": "High compression inconsistencies detected"
+            })
+        elif result["ela"]["score"] > 0.3:
+            tampering_indicators.append({
+                "type": "ELA",
+                "severity": "medium",
+                "message": "Moderate compression variations found"
+            })
+        
+        for indicator in exif_result.get("suspicious_indicators", []):
+            tampering_indicators.append({
+                "type": "EXIF",
+                "severity": "high",
+                "message": indicator
+            })
+        
+        for warning in exif_result.get("warnings", []):
+            tampering_indicators.append({
+                "type": "EXIF",
+                "severity": "low",
+                "message": warning
+            })
+        
+        result["tampering_indicators"] = tampering_indicators
+        
+        # Calculate overall tampering score
+        ela_weight = 0.6
+        exif_weight = 0.4
+        
+        exif_score = len(exif_result.get("suspicious_indicators", [])) * 0.3
+        exif_score += len(exif_result.get("warnings", [])) * 0.1
+        exif_score = min(1.0, exif_score)
+        
+        result["tampering_score"] = (
+            result["ela"]["score"] * ela_weight +
+            exif_score * exif_weight
+        )
+        
+        # Determine verdict
+        if result["tampering_score"] > 0.6:
+            result["verdict"] = "LIKELY_TAMPERED"
+        elif result["tampering_score"] > 0.4:
+            result["verdict"] = "SUSPICIOUS"
+        elif result["tampering_score"] > 0.2:
+            result["verdict"] = "POSSIBLY_MODIFIED"
+        else:
+            result["verdict"] = "LIKELY_AUTHENTIC"
+        
+        # Generate explanation
+        result["explanation"] = get_document_explanation(
+            result["ela"]["score"],
+            exif_result,
+            tampering_indicators
+        )
+        
+    except Exception as e:
+        print(f"Document analysis error: {e}")
+        traceback.print_exc()
+        result["error"] = str(e)
+    
+    return result
+
+# ============================================================
 # API ROUTES
 # ============================================================
 @app.route("/")
 def index():
     return jsonify({
-        "service": "TrustLock Deepfake Detection",
-        "version": "3.0 - Day 3",
-        "features": ["deepfake_detection", "gradcam_heatmaps", "explainability"],
-        "gradcam_available": GRADCAM_AVAILABLE
+        "service": "TrustLock ML Service",
+        "version": "6.0 - Day 6",
+        "features": [
+            "deepfake_detection", 
+            "gradcam_heatmaps", 
+            "explainability",
+            "document_analysis",
+            "ela_detection",
+            "exif_metadata"
+        ],
+        "gradcam_available": GRADCAM_AVAILABLE,
+        "pdf_support": PDF_SUPPORT,
+        "exif_support": EXIF_SUPPORT
     })
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "production": PRODUCTION_MODE, "gradcam": GRADCAM_AVAILABLE})
+    return jsonify({
+        "status": "ok", 
+        "production": PRODUCTION_MODE, 
+        "gradcam": GRADCAM_AVAILABLE,
+        "pdf_support": PDF_SUPPORT,
+        "exif_support": EXIF_SUPPORT
+    })
 
-<<<<<<< HEAD
-@app.route("/analyze-document", methods=["POST"])
-def analyze_document():
-    """
-    Day 6: Document analysis endpoint.
-    Performs ELA, EXIF extraction, and optional deepfake detection.
-    Supports images and PDFs.
-    """
-    job_id = str(uuid.uuid4())
-    file_path = None
-    
-    try:
-        file = request.files.get("file")
-        if not file or not file.filename:
-            return jsonify({"error": "No file provided"}), 400
-        
-        print(f"\n[DOCUMENT ANALYSIS] {file.filename}")
-        
-        ext = Path(file.filename).suffix.lower()
-        file_path = UPLOAD_FOLDER / f"{job_id}{ext}"
-        file.save(file_path)
-        
-        # Determine file type
-        is_pdf = ext == ".pdf"
-        is_image = ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff"}
-        
-        if not is_pdf and not is_image:
-            return jsonify({"error": f"Unsupported file type: {ext}"}), 400
-        
-        results = {
-            "job_id": job_id,
-            "filename": file.filename,
-            "file_type": "pdf" if is_pdf else "image",
-            "pages": []
-        }
-        
-        # Process PDF
-        if is_pdf:
-            if not PDF2IMAGE_AVAILABLE:
-                return jsonify({
-                    "error": "PDF processing not available. Install poppler and pdf2image."
-                }), 503
-            
-            images = convert_pdf_to_images(file_path)
-            
-            if not images:
-                return jsonify({"error": "Failed to convert PDF to images"}), 500
-            
-            for i, img in enumerate(images):
-                # Save temporary image for analysis
-                temp_path = UPLOAD_FOLDER / f"{job_id}_page_{i+1}.png"
-                img.save(temp_path, "PNG")
-                
-                # Perform ELA
-                ela_result = generate_ela(temp_path)
-                
-                # Get image as base64
-                buf = io.BytesIO()
-                img.save(buf, format='PNG')
-                img_base64 = base64.b64encode(buf.getvalue()).decode()
-                
-                page_result = {
-                    "page_number": i + 1,
-                    "image": img_base64,
-                    "ela": ela_result,
-                    "ela_interpretation": get_ela_interpretation(ela_result),
-                    "exif": None  # PDFs don't have EXIF
-                }
-                results["pages"].append(page_result)
-                
-                # Cleanup temp file
-                if temp_path.exists():
-                    temp_path.unlink()
-        
-        # Process Image
-        else:
-            # Perform ELA
-            ela_result = generate_ela(file_path)
-            
-            # Extract EXIF
-            exif_result = extract_exif_metadata(file_path)
-            
-            # Get original image as base64
-            img = Image.open(file_path).convert('RGB')
-            buf = io.BytesIO()
-            # Resize for response if too large
-            max_dim = 1200
-            if img.width > max_dim or img.height > max_dim:
-                ratio = min(max_dim / img.width, max_dim / img.height)
-                new_size = (int(img.width * ratio), int(img.height * ratio))
-                img = img.resize(new_size, Image.Resampling.LANCZOS)
-            img.save(buf, format='PNG')
-            img_base64 = base64.b64encode(buf.getvalue()).decode()
-            
-            page_result = {
-                "page_number": 1,
-                "image": img_base64,
-                "ela": ela_result,
-                "ela_interpretation": get_ela_interpretation(ela_result),
-                "exif": exif_result
-            }
-            results["pages"].append(page_result)
-            
-            # Day 6 Enhancement: Run fraud detection
-            fraud_result = detect_document_fraud(file_path)
-            results["fraud_detection"] = fraud_result
-        
-        # Calculate overall tamper score
-        total_tamper_score = 0
-        tamper_indicators = []
-        
-        for page in results["pages"]:
-            if page["ela"]:
-                ela = page["ela"]
-                if ela["brightness_std"] > 25:
-                    total_tamper_score += 30
-                    tamper_indicators.append(f"Page {page['page_number']}: High ELA variance")
-                elif ela["brightness_std"] > 15:
-                    total_tamper_score += 15
-                
-                if ela["suspect_percentage"] > 5:
-                    total_tamper_score += 25
-                    tamper_indicators.append(f"Page {page['page_number']}: Suspicious regions detected")
-            
-            if page["exif"]:
-                if page["exif"]["editing_detected"]:
-                    total_tamper_score += 40
-                    tamper_indicators.extend(page["exif"]["tamper_indicators"])
-        
-        # Normalize score
-        num_pages = len(results["pages"])
-        if num_pages > 0:
-            total_tamper_score = min(100, total_tamper_score / num_pages)
-        
-        # Determine verdict
-        if total_tamper_score >= 50:
-            verdict = "LIKELY_TAMPERED"
-            confidence = "HIGH"
-        elif total_tamper_score >= 25:
-            verdict = "POSSIBLY_TAMPERED"
-            confidence = "MEDIUM"
-        else:
-            verdict = "LIKELY_AUTHENTIC"
-            confidence = "HIGH" if total_tamper_score < 10 else "MEDIUM"
-        
-        # Integrate fraud detection results (CNN + heuristics)
-        fraud_result = results.get("fraud_detection", {})
-        fraud_authenticity = fraud_result.get("authenticity_score", 100)
-        cnn_prediction = fraud_result.get("cnn_prediction")
-        cnn_confidence = fraud_result.get("cnn_confidence", 0)
-        
-        # Add fraud indicators to tamper_indicators
-        tamper_indicators.extend(fraud_result.get("fraud_indicators", []))
-        
-        # Combine ELA tamper score with fraud detection score
-        # Lower authenticity = higher fraud likelihood
-        combined_fraud_score = 100 - fraud_authenticity  # Convert to fraud score
-        
-        # If CNN predicts FRAUDULENT with confidence, boost fraud score
-        if cnn_prediction == "FRAUDULENT" and cnn_confidence > 0.55:
-            combined_fraud_score = max(combined_fraud_score, cnn_confidence * 100)
-        
-        # If CNN predicts AUTHENTIC with confidence, reduce fraud score
-        if cnn_prediction == "AUTHENTIC" and cnn_confidence > 0.5:
-            combined_fraud_score = combined_fraud_score * (1 - cnn_confidence * 0.5)
-            
-        # Use combined score for final verdict
-        final_score = max(total_tamper_score, combined_fraud_score)
-        
-        # Override verdict based on fraud detection
-        # Only flag as FRAUDULENT if we have strong evidence
-        if fraud_result.get("is_sample_specimen"):
-            verdict = "LIKELY_FRAUDULENT"
-            confidence = "HIGH"
-        elif cnn_prediction == "FRAUDULENT" and cnn_confidence > 0.65:
-            verdict = "LIKELY_FRAUDULENT"
-            confidence = "HIGH" if cnn_confidence > 0.75 else "MEDIUM"
-        elif combined_fraud_score >= 60:
-            verdict = "LIKELY_FRAUDULENT"
-            confidence = "HIGH"
-        elif combined_fraud_score >= 40 and cnn_prediction != "AUTHENTIC":
-            verdict = "SUSPICIOUS"
-            confidence = "MEDIUM"
-        elif combined_fraud_score >= 50:
-            verdict = "SUSPICIOUS"
-            confidence = "LOW"
-        
-        results["summary"] = {
-            "verdict": verdict,
-            "confidence": confidence,
-            "tamper_score": round(final_score, 1),
-            "tamper_indicators": tamper_indicators,
-            "pages_analyzed": num_pages,
-            "document_type": fraud_result.get("document_type", "unknown"),
-            "authenticity_score": fraud_authenticity,
-            "cnn_prediction": cnn_prediction,
-            "cnn_confidence": round(cnn_confidence * 100, 1) if cnn_confidence else None
-        }
-        
-        print(f"[RESULT] {verdict} (Fraud: {combined_fraud_score:.1f}%, ELA: {total_tamper_score:.1f}%)")
-        
-        return jsonify(results)
-        
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-    finally:
-        if file_path and file_path.exists():
-            file_path.unlink()
-
-
-=======
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
 @app.route("/detect", methods=["POST"])
 def detect():
     job_id = str(uuid.uuid4())
@@ -1508,20 +1029,136 @@ def detect():
         if video_path and video_path.exists():
             video_path.unlink()
 
+@app.route("/analyze-document", methods=["POST"])
+def analyze_document():
+    """
+    Analyze uploaded document for tampering.
+    Supports images (JPG, PNG, etc.) and PDFs.
+    
+    Returns:
+    - ELA image (base64)
+    - EXIF metadata
+    - Tampering indicators
+    - Explanation text
+    """
+    job_id = str(uuid.uuid4())
+    file_path = None
+    
+    try:
+        file = request.files.get("file")
+        if not file or not file.filename:
+            return jsonify({"error": "No file provided"}), 400
+        
+        print(f"\n[DOCUMENT ANALYSIS] {file.filename}")
+        
+        ext = Path(file.filename).suffix.lower()
+        file_path = UPLOAD_FOLDER / f"{job_id}{ext}"
+        file.save(file_path)
+        
+        # Check file size (50MB limit)
+        file_size = file_path.stat().st_size
+        max_size = 50 * 1024 * 1024  # 50MB
+        if file_size > max_size:
+            if file_path.exists():
+                file_path.unlink()
+            return jsonify({
+                "error": f"File too large. Maximum size is 50MB, got {file_size / (1024*1024):.1f}MB"
+            }), 413
+        
+        # Handle PDF files
+        if ext == ".pdf":
+            if not PDF_SUPPORT:
+                if file_path.exists():
+                    file_path.unlink()
+                return jsonify({
+                    "error": "PDF support not available. Please install poppler and pdf2image."
+                }), 501
+            
+            print("[DOCUMENT] Converting PDF to image...")
+            images = convert_pdf_to_images(file_path)
+            
+            if not images:
+                if file_path.exists():
+                    file_path.unlink()
+                return jsonify({
+                    "error": "Could not convert PDF to image. Make sure poppler is installed."
+                }), 500
+            
+            # Save first page as temporary image for analysis
+            temp_image_path = UPLOAD_FOLDER / f"{job_id}_page1.png"
+            images[0].save(temp_image_path, format='PNG')
+            analysis_path = temp_image_path
+            is_pdf = True
+            page_count = len(images) if not True else 1  # We only converted first page
+        else:
+            # Validate image file type
+            allowed_types = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif"}
+            if ext not in allowed_types:
+                if file_path.exists():
+                    file_path.unlink()
+                return jsonify({
+                    "error": f"Unsupported file type: {ext}. Allowed: {', '.join(allowed_types)}"
+                }), 415
+            
+            analysis_path = file_path
+            is_pdf = False
+            page_count = 1
+        
+        # Perform document analysis
+        print("[DOCUMENT] Running tampering analysis...")
+        result = analyze_document_tampering(analysis_path)
+        
+        # Clean up temp files
+        if is_pdf and 'temp_image_path' in locals() and temp_image_path.exists():
+            temp_image_path.unlink()
+        
+        print(f"[DOCUMENT] Verdict: {result.get('verdict', 'UNKNOWN')}")
+        print(f"[DOCUMENT] Tampering Score: {result.get('tampering_score', 0) * 100:.1f}%")
+        
+        return jsonify({
+            "jobId": job_id,
+            "status": "completed",
+            "filename": file.filename,
+            "file_type": "pdf" if is_pdf else "image",
+            "page_count": page_count,
+            "result": {
+                "verdict": result.get("verdict", "UNKNOWN"),
+                "tampering_score": round(result.get("tampering_score", 0) * 100, 1),
+                "explanation": result.get("explanation", ""),
+                "original_image": result.get("original_image"),
+                "ela": {
+                    "image": result.get("ela", {}).get("image"),
+                    "score": round(result.get("ela", {}).get("score", 0) * 100, 1)
+                },
+                "exif": {
+                    "has_data": result.get("exif", {}).get("has_exif", False),
+                    "metadata": result.get("exif", {}).get("metadata", {}),
+                    "warnings": result.get("exif", {}).get("warnings", []),
+                    "suspicious_indicators": result.get("exif", {}).get("suspicious_indicators", [])
+                },
+                "tampering_indicators": result.get("tampering_indicators", [])
+            },
+            "metadata": {
+                "pdf_support": PDF_SUPPORT,
+                "exif_support": EXIF_SUPPORT
+            }
+        })
+        
+    except Exception as e:
+        print(f"[DOCUMENT ERROR] {e}")
+        traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
+    finally:
+        if file_path and file_path.exists():
+            file_path.unlink()
+
 if __name__ == "__main__":
     print("\n" + "=" * 50)
-<<<<<<< HEAD
-    print("TrustLock Deepfake Detection - Day 6")
+    print("TrustLock ML Service - Day 6")
     print("=" * 50)
     print(f"Mode: {'PRODUCTION' if PRODUCTION_MODE else 'DEMO'}")
     print(f"Grad-CAM: {'✅ Enabled' if GRADCAM_AVAILABLE else '❌ Disabled'}")
-    print(f"EXIF: {'✅ Enabled' if PIEXIF_AVAILABLE else '❌ Disabled'}")
-    print(f"PDF: {'✅ Enabled' if PDF2IMAGE_AVAILABLE else '❌ Disabled'}")
-=======
-    print("TrustLock Deepfake Detection - Day 3")
-    print("=" * 50)
-    print(f"Mode: {'PRODUCTION' if PRODUCTION_MODE else 'DEMO'}")
-    print(f"Grad-CAM: {'✅ Enabled' if GRADCAM_AVAILABLE else '❌ Disabled'}")
->>>>>>> 4336965e78d04836c64348343ce98ab69529cd81
+    print(f"PDF Support: {'✅ Enabled' if PDF_SUPPORT else '❌ Disabled'}")
+    print(f"EXIF Support: {'✅ Enabled' if EXIF_SUPPORT else '❌ Disabled'}")
     print("=" * 50 + "\n")
     app.run(host="0.0.0.0", port=5000, debug=False)
