@@ -73,6 +73,23 @@ function getSeverityColor(severity: string): string {
     }
 }
 
+// Helper to safely render explanation (handles object responses)
+function formatExplanation(explanation: unknown): string {
+    if (typeof explanation === 'string') return explanation
+    if (typeof explanation === 'object' && explanation !== null) {
+        // Handle case where explanation is an object with nested findings
+        const parts: string[] = []
+        const obj = explanation as Record<string, unknown>
+        for (const [_key, value] of Object.entries(obj)) {
+            if (typeof value === 'string' && value.trim()) {
+                parts.push(value)
+            }
+        }
+        return parts.join(' ') || 'Analysis complete.'
+    }
+    return 'Analysis complete.'
+}
+
 export default function DocumentAnalysis() {
     const [file, setFile] = useState<File | null>(null)
     const [isDragging, setIsDragging] = useState(false)
@@ -279,7 +296,7 @@ export default function DocumentAnalysis() {
 
                         {/* Explanation */}
                         <div className="mt-6 p-4 bg-black/20 rounded-xl">
-                            <p className="text-gray-300 text-sm leading-relaxed">{result.result.explanation}</p>
+                            <p className="text-gray-300 text-sm leading-relaxed">{formatExplanation(result.result.explanation)}</p>
                         </div>
                     </div>
 

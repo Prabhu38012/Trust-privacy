@@ -110,6 +110,35 @@ else:
     model.eval().to(device)
     INVERT_SCORES = False
 
+# ============================================================
+# DOCUMENT DETECTOR MODEL
+# ============================================================
+DOCUMENT_MODEL_PATH = MODELS_FOLDER / "document_detector.pth"
+DOCUMENT_MODEL_AVAILABLE = DOCUMENT_MODEL_PATH.exists()
+
+if DOCUMENT_MODEL_AVAILABLE:
+    print(f"✅ Loading document detector: {DOCUMENT_MODEL_PATH}")
+    try:
+        document_model = DeepfakeDetector()  # Same architecture as deepfake detector
+        checkpoint = torch.load(DOCUMENT_MODEL_PATH, map_location=device, weights_only=False)
+        
+        # Handle both checkpoint dict format and direct state_dict format
+        if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+            document_model.load_state_dict(checkpoint['model_state_dict'])
+            print(f"   Loaded from checkpoint (accuracy: {checkpoint.get('val_acc', 'N/A')})")
+        else:
+            document_model.load_state_dict(checkpoint)
+        
+        document_model.eval().to(device)
+        print("✅ DOCUMENT DETECTOR LOADED")
+    except Exception as e:
+        print(f"⚠️ Document detector load error: {e}")
+        document_model = None
+        DOCUMENT_MODEL_AVAILABLE = False
+else:
+    document_model = None
+    print("⚠️ No document detector model found")
+
 preprocess = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
@@ -569,6 +598,259 @@ def _get_verdict(final, std):
 # DOCUMENT ANALYSIS - ELA, EXIF, PDF
 # ============================================================
 
+def analyze_document_with_cnn(image_path):
+    """
+    Run document through trained CNN detector.
+    
+    Returns:
+        tuple: (score 0-1, is_available bool)
+    """
+    if not DOCUMENT_MODEL_AVAILABLE or document_model is None:
+        return 0.5, False
+    
+    try:
+        img = Image.open(image_path).convert('RGB')
+        input_tensor = preprocess(img).unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            output = document_model(input_tensor)
+            prob = torch.sigmoid(output).item()
+        
+        # CNN outputs: 0 = real, 1 = fake
+        print(f"  [CNN] Raw score: {prob:.3f}")
+        return prob, True
+    except Exception as e:
+        print(f"  [CNN] Error: {e}")
+        return 0.5, False
+
+
+def detect_watermarks(image):
+    """
+    Detect common watermark patterns indicating sample/specimen documents.
+    Uses color analysis and pattern detection.
+    
+    Returns:
+        tuple: (watermark_score 0-1, detected_patterns list)
+    """
+    try:
+        img_array = np.array(image.convert('RGB'))
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        hsv = cv2.cvtColor(img_array, cv2.COLOR_RGB2HSV)
+        
+        detected = []
+        score = 0.0
+        
+        # Check for red/pink text (common for SAMPLE/SPECIMEN stamps)
+        # Red in HSV: H=0-10 or 170-180, S>100, V>100
+        lower_red1 = np.array([0, 100, 100])
+        upper_red1 = np.array([10, 255, 255])
+        lower_red2 = np.array([160, 100, 100])
+        upper_red2 = np.array([180, 255, 255])
+        
+        mask_red1 = cv2.inRange(hsv, lower_red1, upper_red1)
+        mask_red2 = cv2.inRange(hsv, lower_red2, upper_red2)
+        red_mask = mask_red1 | mask_red2
+        
+        red_ratio = np.sum(red_mask > 0) / red_mask.size
+        if red_ratio > 0.005:  # More than 0.5% red pixels
+            detected.append("Red stamp/watermark detected")
+            score += 0.3
+        
+        # Check for diagonal line patterns (common watermark orientation)
+        edges = cv2.Canny(gray, 50, 150)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 50, minLineLength=50, maxLineGap=10)
+        
+        if lines is not None:
+            diagonal_lines = 0
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                if x2 != x1:
+                    angle = abs(np.arctan((y2 - y1) / (x2 - x1)) * 180 / np.pi)
+                    if 30 < angle < 60:  # Diagonal lines (30-60 degrees)
+                        diagonal_lines += 1
+            
+            if diagonal_lines > 5:
+                detected.append(f"Diagonal pattern detected ({diagonal_lines} lines)")
+                score += 0.2
+        
+        # Check for repeating text patterns (watermark grids)
+        # Look for high-frequency patterns in specific regions
+        h, w = gray.shape
+        center_region = gray[h//4:3*h//4, w//4:3*w//4]
+        
+        # FFT to detect repeating patterns
+        f = np.fft.fft2(center_region.astype(float))
+        fshift = np.fft.fftshift(f)
+        magnitude = np.abs(fshift)
+        
+        # High peaks outside center indicate repeating patterns
+        center_h, center_w = magnitude.shape[0]//2, magnitude.shape[1]//2
+        magnitude[center_h-5:center_h+5, center_w-5:center_w+5] = 0  # Remove DC
+        
+        if np.max(magnitude) > np.mean(magnitude) * 50:
+            detected.append("Repeating pattern detected (possible watermark grid)")
+            score += 0.25
+        
+        print(f"  [WATERMARK] Score: {score:.2f}, Patterns: {detected}")
+        return min(score, 1.0), detected
+        
+    except Exception as e:
+        print(f"  [WATERMARK] Error: {e}")
+        return 0.0, []
+
+
+def detect_edge_inconsistencies(image):
+    """
+    Detect boundary artifacts from cut-paste operations.
+    Looks for unnatural edges and color discontinuities.
+    
+    Returns:
+        tuple: (edge_score 0-1, edge_indicators list)
+    """
+    try:
+        img_array = np.array(image.convert('RGB'))
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        
+        indicators = []
+        score = 0.0
+        
+        # Detect edges with different thresholds
+        edges_low = cv2.Canny(gray, 30, 100)
+        edges_high = cv2.Canny(gray, 100, 200)
+        
+        # Look for very sharp, unnatural boundaries
+        # Real documents have more gradual edges
+        edge_density_low = np.sum(edges_low > 0) / edges_low.size
+        edge_density_high = np.sum(edges_high > 0) / edges_high.size
+        
+        edge_ratio = edge_density_high / (edge_density_low + 0.001)
+        
+        if edge_ratio > 0.7:  # Too many sharp edges
+            indicators.append("Unusually sharp edges detected")
+            score += 0.25
+        
+        # Check for rectangular boundaries (cut-paste indicator)
+        contours, _ = cv2.findContours(edges_high, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        rectangular_contours = 0
+        for contour in contours:
+            if cv2.contourArea(contour) > 1000:  # Significant area
+                peri = cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+                if len(approx) == 4:  # Rectangle
+                    rectangular_contours += 1
+        
+        if rectangular_contours > 3:
+            indicators.append(f"Multiple rectangular regions ({rectangular_contours})")
+            score += 0.2
+        
+        # Check for color discontinuities at edges
+        # Compute gradient magnitude
+        sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+        sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+        gradient_mag = np.sqrt(sobelx**2 + sobely**2)
+        
+        # Very high local gradients can indicate splicing
+        high_gradient_ratio = np.sum(gradient_mag > 200) / gradient_mag.size
+        if high_gradient_ratio > 0.02:
+            indicators.append("High gradient discontinuities")
+            score += 0.2
+        
+        print(f"  [EDGE] Score: {score:.2f}, Indicators: {indicators}")
+        return min(score, 1.0), indicators
+        
+    except Exception as e:
+        print(f"  [EDGE] Error: {e}")
+        return 0.0, []
+
+
+def calculate_multi_signal_score(ela_score, exif_score, cnn_score, cnn_available, watermark_score, edge_score):
+    """
+    Multi-signal aggregation with adaptive weights.
+    Boosts score when multiple signals agree.
+    
+    Returns:
+        tuple: (final_score 0-1, confidence str, signal_details dict)
+    """
+    if cnn_available:
+        # CNN is primary signal when available
+        weights = {
+            'cnn': 0.40,
+            'ela': 0.25,
+            'watermark': 0.15,
+            'edge': 0.10,
+            'exif': 0.10
+        }
+        final_score = (
+            weights['cnn'] * cnn_score +
+            weights['ela'] * ela_score +
+            weights['watermark'] * watermark_score +
+            weights['edge'] * edge_score +
+            weights['exif'] * exif_score
+        )
+    else:
+        # Fall back to heuristic-heavy approach
+        weights = {
+            'ela': 0.40,
+            'watermark': 0.25,
+            'edge': 0.20,
+            'exif': 0.15
+        }
+        final_score = (
+            weights['ela'] * ela_score +
+            weights['watermark'] * watermark_score +
+            weights['edge'] * edge_score +
+            weights['exif'] * exif_score
+        )
+    
+    # Count agreeing signals (all indicating fake)
+    signals_fake = sum([
+        ela_score > 0.45,
+        cnn_score > 0.50 if cnn_available else False,
+        watermark_score > 0.25,
+        edge_score > 0.30,
+        exif_score > 0.30
+    ])
+    
+    # Count agreeing signals (all indicating real)
+    signals_real = sum([
+        ela_score < 0.25,
+        cnn_score < 0.35 if cnn_available else False,
+        watermark_score < 0.1,
+        edge_score < 0.15
+    ])
+    
+    # Boost for consensus
+    if signals_fake >= 3:
+        final_score = max(final_score, 0.65)
+        confidence = "HIGH"
+    elif signals_real >= 3:
+        final_score = min(final_score, 0.25)
+        confidence = "HIGH"
+    elif signals_fake >= 2 or signals_real >= 2:
+        confidence = "MEDIUM"
+    else:
+        confidence = "LOW"
+    
+    signal_details = {
+        'ela': round(ela_score, 3),
+        'cnn': round(cnn_score, 3) if cnn_available else None,
+        'cnn_available': cnn_available,
+        'watermark': round(watermark_score, 3),
+        'edge': round(edge_score, 3),
+        'exif': round(exif_score, 3),
+        'signals_fake': signals_fake,
+        'signals_real': signals_real,
+        'weights_used': weights
+    }
+    
+    print(f"  [SCORE] Final: {final_score:.2f}, Confidence: {confidence}")
+    print(f"  [SCORE] Signals - Fake: {signals_fake}, Real: {signals_real}")
+    
+    return round(final_score, 3), confidence, signal_details
+
+
+
 def perform_ela(image, quality=90, scale=15):
     """
     Perform Error Level Analysis on an image.
@@ -806,7 +1088,14 @@ def get_document_explanation(ela_score, exif_result, tampering_indicators):
 
 def analyze_document_tampering(image_path):
     """
-    Perform comprehensive document tampering analysis.
+    Perform comprehensive document tampering analysis using multi-signal aggregation.
+    
+    Signals used:
+    - CNN: Trained document detector model (40% weight when available)
+    - ELA: Error Level Analysis (25-40% weight)
+    - Watermark: SAMPLE/SPECIMEN detection (15-25% weight)
+    - Edge: Cut-paste boundary detection (10-20% weight)
+    - EXIF: Metadata analysis (10-15% weight)
     
     Returns:
         dict: Complete analysis results
@@ -822,20 +1111,35 @@ def analyze_document_tampering(image_path):
             "suspicious_indicators": [],
             "has_exif": False
         },
+        "cnn": {
+            "score": 0.0,
+            "available": False
+        },
+        "watermark": {
+            "score": 0.0,
+            "patterns": []
+        },
+        "edge": {
+            "score": 0.0,
+            "indicators": []
+        },
         "tampering_indicators": [],
         "tampering_score": 0.0,
         "verdict": "UNKNOWN",
-        "explanation": ""
+        "confidence": "LOW",
+        "explanation": "",
+        "signal_details": {}
     }
     
     try:
+        print(f"  [DOCUMENT] Starting multi-signal analysis...")
+        
         # Load image
         img = Image.open(image_path)
         original = img.convert('RGB')
         
         # Generate original image base64
         orig_buffer = io.BytesIO()
-        # Resize for display if too large
         display_img = original.copy()
         max_size = 800
         if max(display_img.size) > max_size:
@@ -845,32 +1149,92 @@ def analyze_document_tampering(image_path):
         display_img.save(orig_buffer, format='PNG')
         result["original_image"] = base64.b64encode(orig_buffer.getvalue()).decode()
         
-        # Perform ELA
+        # === SIGNAL 1: ELA Analysis ===
+        print("  [DOCUMENT] Running ELA analysis...")
         ela_img, ela_base64 = perform_ela(original)
+        ela_score = 0.0
         if ela_base64:
             result["ela"]["image"] = ela_base64
-            result["ela"]["score"] = calculate_ela_score(ela_img)
+            ela_score = calculate_ela_score(ela_img)
+            result["ela"]["score"] = ela_score
+            print(f"  [ELA] Score: {ela_score:.3f}")
         
-        # Extract EXIF
+        # === SIGNAL 2: CNN Analysis ===
+        print("  [DOCUMENT] Running CNN analysis...")
+        cnn_score, cnn_available = analyze_document_with_cnn(image_path)
+        result["cnn"]["score"] = cnn_score
+        result["cnn"]["available"] = cnn_available
+        
+        # === SIGNAL 3: Watermark Detection ===
+        print("  [DOCUMENT] Checking for watermarks...")
+        watermark_score, watermark_patterns = detect_watermarks(original)
+        result["watermark"]["score"] = watermark_score
+        result["watermark"]["patterns"] = watermark_patterns
+        
+        # === SIGNAL 4: Edge Inconsistency Detection ===
+        print("  [DOCUMENT] Checking edge consistency...")
+        edge_score, edge_indicators = detect_edge_inconsistencies(original)
+        result["edge"]["score"] = edge_score
+        result["edge"]["indicators"] = edge_indicators
+        
+        # === SIGNAL 5: EXIF Metadata ===
+        print("  [DOCUMENT] Extracting EXIF metadata...")
         exif_result = extract_exif_metadata(image_path)
         result["exif"] = exif_result
         
-        # Compile tampering indicators
+        # Calculate EXIF score
+        exif_score = len(exif_result.get("suspicious_indicators", [])) * 0.3
+        exif_score += len(exif_result.get("warnings", [])) * 0.1
+        exif_score = min(1.0, exif_score)
+        
+        # === COMPILE TAMPERING INDICATORS ===
         tampering_indicators = []
         
-        if result["ela"]["score"] > 0.5:
+        # ELA indicators
+        if ela_score > 0.5:
             tampering_indicators.append({
                 "type": "ELA",
                 "severity": "high",
                 "message": "High compression inconsistencies detected"
             })
-        elif result["ela"]["score"] > 0.3:
+        elif ela_score > 0.3:
             tampering_indicators.append({
                 "type": "ELA",
                 "severity": "medium",
                 "message": "Moderate compression variations found"
             })
         
+        # CNN indicators
+        if cnn_available and cnn_score > 0.6:
+            tampering_indicators.append({
+                "type": "CNN",
+                "severity": "high",
+                "message": f"AI model detected tampering (confidence: {cnn_score*100:.0f}%)"
+            })
+        elif cnn_available and cnn_score > 0.4:
+            tampering_indicators.append({
+                "type": "CNN",
+                "severity": "medium",
+                "message": f"AI model found suspicious patterns (confidence: {cnn_score*100:.0f}%)"
+            })
+        
+        # Watermark indicators
+        for pattern in watermark_patterns:
+            tampering_indicators.append({
+                "type": "WATERMARK",
+                "severity": "high" if "SAMPLE" in pattern.upper() or "SPECIMEN" in pattern.upper() else "medium",
+                "message": pattern
+            })
+        
+        # Edge indicators
+        for indicator in edge_indicators:
+            tampering_indicators.append({
+                "type": "EDGE",
+                "severity": "medium",
+                "message": indicator
+            })
+        
+        # EXIF indicators
         for indicator in exif_result.get("suspicious_indicators", []):
             tampering_indicators.append({
                 "type": "EXIF",
@@ -887,35 +1251,55 @@ def analyze_document_tampering(image_path):
         
         result["tampering_indicators"] = tampering_indicators
         
-        # Calculate overall tampering score
-        ela_weight = 0.6
-        exif_weight = 0.4
-        
-        exif_score = len(exif_result.get("suspicious_indicators", [])) * 0.3
-        exif_score += len(exif_result.get("warnings", [])) * 0.1
-        exif_score = min(1.0, exif_score)
-        
-        result["tampering_score"] = (
-            result["ela"]["score"] * ela_weight +
-            exif_score * exif_weight
+        # === CALCULATE MULTI-SIGNAL SCORE ===
+        print("  [DOCUMENT] Calculating final score...")
+        final_score, confidence, signal_details = calculate_multi_signal_score(
+            ela_score=ela_score,
+            exif_score=exif_score,
+            cnn_score=cnn_score,
+            cnn_available=cnn_available,
+            watermark_score=watermark_score,
+            edge_score=edge_score
         )
         
-        # Determine verdict
-        if result["tampering_score"] > 0.6:
-            result["verdict"] = "LIKELY_TAMPERED"
-        elif result["tampering_score"] > 0.4:
+        result["tampering_score"] = final_score
+        result["confidence"] = confidence
+        result["signal_details"] = signal_details
+        
+        # === DETERMINE VERDICT ===
+        if final_score > 0.65:
+            result["verdict"] = "FAKE"
+        elif final_score > 0.50:
             result["verdict"] = "SUSPICIOUS"
-        elif result["tampering_score"] > 0.2:
-            result["verdict"] = "POSSIBLY_MODIFIED"
+        elif final_score > 0.35:
+            result["verdict"] = "UNCERTAIN"
         else:
-            result["verdict"] = "LIKELY_AUTHENTIC"
+            result["verdict"] = "REAL"
         
-        # Generate explanation
-        result["explanation"] = get_document_explanation(
-            result["ela"]["score"],
-            exif_result,
-            tampering_indicators
-        )
+        # === GENERATE EXPLANATION ===
+        explanations = []
+        
+        # CNN explanation (if available)
+        if cnn_available:
+            if cnn_score > 0.6:
+                explanations.append(f"AI document detector identified this as likely tampered (score: {cnn_score*100:.0f}%).")
+            elif cnn_score < 0.35:
+                explanations.append(f"AI document detector found no signs of tampering (score: {cnn_score*100:.0f}%).")
+        
+        # ELA explanation
+        explanations.append(get_document_explanation(ela_score, exif_result, tampering_indicators))
+        
+        # Watermark explanation
+        if watermark_patterns:
+            explanations.append(f"Pattern analysis detected: {', '.join(watermark_patterns[:2])}")
+        
+        # Edge explanation
+        if edge_indicators:
+            explanations.append(f"Edge analysis: {', '.join(edge_indicators[:2])}")
+        
+        result["explanation"] = " ".join(explanations)
+        
+        print(f"  [DOCUMENT] Complete - Verdict: {result['verdict']} ({final_score*100:.1f}%)")
         
     except Exception as e:
         print(f"Document analysis error: {e}")
@@ -1123,6 +1507,7 @@ def analyze_document():
             "page_count": page_count,
             "result": {
                 "verdict": result.get("verdict", "UNKNOWN"),
+                "confidence": result.get("confidence", "LOW"),
                 "tampering_score": round(result.get("tampering_score", 0) * 100, 1),
                 "explanation": result.get("explanation", ""),
                 "original_image": result.get("original_image"),
@@ -1130,17 +1515,31 @@ def analyze_document():
                     "image": result.get("ela", {}).get("image"),
                     "score": round(result.get("ela", {}).get("score", 0) * 100, 1)
                 },
+                "cnn": {
+                    "available": result.get("cnn", {}).get("available", False),
+                    "score": round(result.get("cnn", {}).get("score", 0) * 100, 1) if result.get("cnn", {}).get("available") else None
+                },
+                "watermark": {
+                    "score": round(result.get("watermark", {}).get("score", 0) * 100, 1),
+                    "patterns": result.get("watermark", {}).get("patterns", [])
+                },
+                "edge": {
+                    "score": round(result.get("edge", {}).get("score", 0) * 100, 1),
+                    "indicators": result.get("edge", {}).get("indicators", [])
+                },
                 "exif": {
                     "has_data": result.get("exif", {}).get("has_exif", False),
                     "metadata": result.get("exif", {}).get("metadata", {}),
                     "warnings": result.get("exif", {}).get("warnings", []),
                     "suspicious_indicators": result.get("exif", {}).get("suspicious_indicators", [])
                 },
-                "tampering_indicators": result.get("tampering_indicators", [])
+                "tampering_indicators": result.get("tampering_indicators", []),
+                "signal_details": result.get("signal_details", {})
             },
             "metadata": {
                 "pdf_support": PDF_SUPPORT,
-                "exif_support": EXIF_SUPPORT
+                "exif_support": EXIF_SUPPORT,
+                "cnn_available": DOCUMENT_MODEL_AVAILABLE
             }
         })
         
